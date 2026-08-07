@@ -1,4 +1,7 @@
+import os
+
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 import db
 import drive
@@ -6,9 +9,29 @@ import pipeline
 
 db.init_db()
 
+# The streamable-http transport rejects requests whose Host/Origin aren't on
+# this list (DNS-rebinding protection). Render's own hostname is picked up
+# automatically; MCP_ALLOWED_HOSTS lets you add more (comma-separated) if the
+# service is reachable under another domain too.
+_allowed_hosts = ["127.0.0.1", "localhost"]
+_allowed_origins = ["http://127.0.0.1", "http://localhost"]
+_render_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+if _render_host:
+    _allowed_hosts.append(_render_host)
+    _allowed_origins.append(f"https://{_render_host}")
+for _extra in os.environ.get("MCP_ALLOWED_HOSTS", "").split(","):
+    _extra = _extra.strip()
+    if _extra:
+        _allowed_hosts.append(_extra)
+        _allowed_origins.append(f"https://{_extra}")
+
 mcp = FastMCP(
     name="image-crawler",
     streamable_http_path="/",  # mounted at /mcp externally in asgi.py; avoid a doubled /mcp/mcp path
+    transport_security=TransportSecuritySettings(
+        allowed_hosts=_allowed_hosts,
+        allowed_origins=_allowed_origins,
+    ),
     instructions=(
         "Downloads images found elsewhere on the web into real files, converts "
         "them to JPG/PNG when needed, tracks them in a registry, and can upload "
