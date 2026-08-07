@@ -1,0 +1,172 @@
+openapi: 3.1.0
+info:
+  title: Image Crawler
+  description: >
+    Downloads image URLs (found elsewhere, e.g. via web search) into real files,
+    converts them to JPG/PNG when needed, tracks them in a registry, and can
+    upload them to the user's Google Drive. Does not search the web itself —
+    call these endpoints once you already have image URLs.
+  version: "1.0.0"
+servers:
+  - url: https://YOUR-APP-NAME.onrender.com
+    description: Replace with your actual Render URL after deploying.
+security:
+  - ApiKeyAuth: []
+paths:
+  /api/images/download:
+    post:
+      operationId: downloadImage
+      summary: Download a single image URL and save it as a real file.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:
+                  type: string
+                  description: Direct URL to the image file.
+                source_page:
+                  type: string
+                  description: Page the image was found on (used as Referer to get past hotlink protection).
+                title:
+                  type: string
+                  description: Short human-readable label for this image.
+                folder:
+                  type: string
+                  description: Job/collection name to group this image under. Omit for today's default job.
+      responses:
+        "200":
+          description: Download result (success or failure).
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /api/images/download-batch:
+    post:
+      operationId: downloadImages
+      summary: Download several image URLs at once into the same folder/job.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [images]
+              properties:
+                images:
+                  type: array
+                  items:
+                    type: object
+                    required: [url]
+                    properties:
+                      url:
+                        type: string
+                      source_page:
+                        type: string
+                      title:
+                        type: string
+                folder:
+                  type: string
+      responses:
+        "200":
+          description: Per-image success/failure results.
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /api/images/{image_id}:
+    get:
+      operationId: getImage
+      summary: Look up a previously downloaded image's metadata.
+      parameters:
+        - name: image_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Image metadata.
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /api/jobs/{job_id}:
+    get:
+      operationId: getJob
+      summary: List all images saved under a given folder/job name.
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Job info and its images.
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /api/drive/upload:
+    post:
+      operationId: uploadToDrive
+      summary: Upload one previously-downloaded image to the user's Google Drive.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [file_id]
+              properties:
+                file_id:
+                  type: string
+                folder_id:
+                  type: string
+                  description: Optional existing Drive folder ID. Omit to auto-create one named after the job.
+      responses:
+        "200":
+          description: Upload result including drive_file_id and drive_url.
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /api/drive/upload-job:
+    post:
+      operationId: uploadJobToDrive
+      summary: Upload every image in a folder/job to the user's Google Drive at once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [job_id]
+              properties:
+                job_id:
+                  type: string
+                folder_id:
+                  type: string
+      responses:
+        "200":
+          description: Per-image upload results.
+          content:
+            application/json:
+              schema:
+                type: object
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key

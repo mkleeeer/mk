@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>이미지 크롤러</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, "Segoe UI", sans-serif; max-width: 1000px; margin: 40px auto; padding: 0 16px; }
+  h1 { font-size: 1.4rem; }
+  .row { display: flex; gap: 8px; margin-bottom: 12px; }
+  input[type=text] { flex: 1; padding: 10px 12px; font-size: 1rem; border: 1px solid #999; border-radius: 6px; }
+  button { padding: 10px 16px; font-size: 0.95rem; border: none; border-radius: 6px; background: #2563eb; color: white; cursor: pointer; }
+  button:hover { background: #1d4ed8; }
+  button.secondary { background: #6b7280; }
+  button.secondary:hover { background: #4b5563; }
+  button:disabled { background: #aaa; cursor: not-allowed; }
+  #status { color: #666; margin-bottom: 12px; min-height: 1.2em; }
+  #toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+  .card { border: 1px solid #ddd; border-radius: 8px; overflow: hidden; position: relative; }
+  .card img { width: 100%; height: 140px; object-fit: cover; display: block; background: #f0f0f0; }
+  .card label { display: flex; align-items: center; gap: 6px; padding: 6px 8px; font-size: 0.8rem; }
+  .card .dl { display: block; text-align: center; padding: 6px; font-size: 0.78rem; background: #eee; text-decoration: none; color: #333; }
+  .card .dl:hover { background: #ddd; }
+</style>
+</head>
+<body>
+  <h1>이미지 크롤러</h1>
+  <p style="color:#666; font-size:0.9rem;">웹페이지 주소(또는 이미지 직접 링크)를 입력하면 이미지들을 찾아서 보여줍니다. 사이트가 막아둔 경우에도 서버가 대신 요청해서 가져옵니다.</p>
+
+  <div class="row">
+    <input type="text" id="urlInput" placeholder="https://example.com/gallery">
+    <button id="searchBtn">이미지 찾기</button>
+  </div>
+  <div id="status"></div>
+
+  <div id="toolbar" style="display:none;">
+    <button class="secondary" id="selectAllBtn">전체 선택</button>
+    <button class="secondary" id="selectNoneBtn">선택 해제</button>
+    <button id="zipBtn">선택 항목 zip 다운로드</button>
+  </div>
+
+  <div id="grid"></div>
+
+<script>
+let currentPageUrl = "";
+let currentImages = [];
+
+const urlInput = document.getElementById("urlInput");
+const searchBtn = document.getElementById("searchBtn");
+const statusEl = document.getElementById("status");
+const grid = document.getElementById("grid");
+const toolbar = document.getElementById("toolbar");
+
+async function search() {
+  const url = urlInput.value.trim();
+  if (!url) return;
+  statusEl.textContent = "불러오는 중...";
+  searchBtn.disabled = true;
+  grid.innerHTML = "";
+  toolbar.style.display = "none";
+
+  try {
+    const res = await fetch("/extract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      statusEl.textContent = "오류: " + data.error;
+      return;
+    }
+    currentPageUrl = data.page_url;
+    currentImages = data.images;
+    if (currentImages.length === 0) {
+      statusEl.textContent = "이미지를 찾지 못했습니다.";
+      return;
+    }
+    statusEl.textContent = `${currentImages.length}개의 이미지를 찾았습니다.`;
+    toolbar.style.display = "flex";
+    render();
+  } catch (e) {
+    statusEl.textContent = "요청 실패: " + e;
+  } finally {
+    searchBtn.disabled = false;
+  }
+}
+
+function render() {
+  grid.innerHTML = "";
+  currentImages.forEach((img, i) => {
+    const card = document.createElement("div");
+    card.className = "card";
+
+    const proxied = `/proxy?url=${encodeURIComponent(img.url)}&ref=${encodeURIComponent(currentPageUrl)}`;
+    const dl = `/download?url=${encodeURIComponent(img.url)}&ref=${encodeURIComponent(currentPageUrl)}`;
+
+    card.innerHTML = `
+      <img src="${proxied}" loading="lazy">
+      <label><input type="checkbox" class="pick" data-i="${i}" checked> 선택</label>
+      <a class="dl" href="${dl}">다운로드</a>
+    `;
+    const imgEl = card.querySelector("img");
+    imgEl.addEventListener("error", () => {
+      if (imgEl.dataset.retried) {
+        imgEl.style.opacity = 0.2;
+        imgEl.title = "불러오기 실패 (사이트가 일시적으로 요청을 거부했습니다)";
+        return;
+      }
+      imgEl.dataset.retried = "1";
+      setTimeout(() => { imgEl.src = proxied + "&retry=1"; }, 1500 + Math.random() * 2000);
+    });
+    grid.appendChild(card);
+  });
+}
+
+document.getElementById("selectAllBtn").onclick = () => {
+  document.querySelectorAll(".pick").forEach(cb => cb.checked = true);
+};
+document.getElementById("selectNoneBtn").onclick = () => {
+  document.querySelectorAll(".pick").forEach(cb => cb.checked = false);
+};
+
+document.getElementById("zipBtn").onclick = async () => {
+  const picked = [...document.querySelectorAll(".pick:checked")].map(cb => currentImages[cb.dataset.i].url);
+  if (picked.length === 0) { alert("선택된 이미지가 없습니다."); return; }
+  statusEl.textContent = "압축 중... (이미지 수에 따라 시간이 걸릴 수 있습니다)";
+  const res = await fetch("/download_zip", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ urls: picked, page_url: currentPageUrl })
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    statusEl.textContent = "오류: " + data.error;
+    return;
+  }
+  const blob = await res.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "images.zip";
+  a.click();
+  statusEl.textContent = `${currentImages.length}개의 이미지를 찾았습니다.`;
+};
+
+searchBtn.onclick = search;
+urlInput.addEventListener("keydown", e => { if (e.key === "Enter") search(); });
+</script>
+</body>
+</html>

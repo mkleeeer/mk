@@ -1,0 +1,13 @@
+venv/
+__pycache__/
+*.pyc
+
+# Local data — never commit
+downloads/
+registry.db
+*.log
+
+# Secrets — never commit
+client_secret.json
+token.json
+.env
