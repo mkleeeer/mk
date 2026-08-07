@@ -8,8 +8,7 @@ info:
     call these endpoints once you already have image URLs.
   version: "1.0.0"
 servers:
-  - url: https://YOUR-APP-NAME.onrender.com
-    description: Replace with your actual Render URL after deploying.
+  - url: https://mk-egix.onrender.com
 security:
   - ApiKeyAuth: []
 paths:
