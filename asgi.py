@@ -23,6 +23,11 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             auth = request.headers.get("authorization", "")
             if auth.startswith("Bearer "):
                 provided = auth[len("Bearer "):]
+        if not provided:
+            # Fallback for clients that can only register a fixed URL (no
+            # custom headers), e.g. claude.ai's custom-connector form only
+            # offers OAuth — so the key can be embedded in the URL instead.
+            provided = request.query_params.get("api_key", "")
         if provided != API_KEY:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         return await call_next(request)

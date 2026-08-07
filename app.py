@@ -31,6 +31,8 @@ def _require_api_key():
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             provided = auth[len("Bearer "):]
+    if not provided:
+        provided = request.args.get("api_key", "")
     if provided != API_KEY:
         return jsonify({"error": "unauthorized"}), 401
 
