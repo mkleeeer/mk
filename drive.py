@@ -20,9 +20,15 @@ class DriveNotConfigured(Exception):
 
 
 def _load_client_config() -> dict:
-    env_value = os.environ.get("GOOGLE_CLIENT_SECRET_JSON")
+    env_value = (os.environ.get("GOOGLE_CLIENT_SECRET_JSON") or "").strip()
     if env_value:
-        return json.loads(env_value)
+        try:
+            return json.loads(env_value)
+        except json.JSONDecodeError as e:
+            raise DriveNotConfigured(
+                f"GOOGLE_CLIENT_SECRET_JSON 환경변수가 올바른 JSON이 아닙니다 ({e}). "
+                f"client_secret.json 파일 내용 전체를 다시 복사해서 넣어보세요."
+            ) from e
     if CLIENT_SECRET_FILE.exists():
         return json.loads(CLIENT_SECRET_FILE.read_text(encoding="utf-8"))
     raise DriveNotConfigured(
@@ -32,9 +38,15 @@ def _load_client_config() -> dict:
 
 
 def _load_saved_token() -> Credentials | None:
-    env_value = os.environ.get("GOOGLE_TOKEN_JSON")
+    env_value = (os.environ.get("GOOGLE_TOKEN_JSON") or "").strip()
     if env_value:
-        return Credentials.from_authorized_user_info(json.loads(env_value), SCOPES)
+        try:
+            return Credentials.from_authorized_user_info(json.loads(env_value), SCOPES)
+        except json.JSONDecodeError as e:
+            raise DriveNotConfigured(
+                f"GOOGLE_TOKEN_JSON 환경변수가 올바른 JSON이 아닙니다 ({e}). "
+                f"token.json 파일 내용 전체를 다시 복사해서 넣어보세요."
+            ) from e
     if TOKEN_FILE.exists():
         return Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
     return None
