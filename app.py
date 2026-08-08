@@ -1,5 +1,4 @@
 import io
-import os
 import re
 import zipfile
 from urllib.parse import urljoin, urlparse
@@ -15,26 +14,6 @@ import pipeline
 
 app = Flask(__name__)
 db.init_db()
-
-# When API_KEY is set (production/cloud deploys), every request must carry it
-# via "X-API-Key: <key>" or "Authorization: Bearer <key>". Left unset for
-# local use (run.bat) so nothing changes for the existing browser UI.
-API_KEY = os.environ.get("API_KEY")
-
-
-@app.before_request
-def _require_api_key():
-    if not API_KEY:
-        return None
-    provided = request.headers.get("X-API-Key") or ""
-    if not provided:
-        auth = request.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            provided = auth[len("Bearer "):]
-    if not provided:
-        provided = request.args.get("api_key", "")
-    if provided != API_KEY:
-        return jsonify({"error": "unauthorized"}), 401
 
 
 def largest_from_srcset(srcset: str) -> str:

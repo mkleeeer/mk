@@ -1,5 +1,3 @@
-import json
-import os
 from pathlib import Path
 
 from google.auth.transport.requests import Request
@@ -19,68 +17,25 @@ class DriveNotConfigured(Exception):
     pass
 
 
-def _load_client_config() -> dict:
-    env_value = (os.environ.get("GOOGLE_CLIENT_SECRET_JSON") or "").strip()
-    if env_value:
-        try:
-            return json.loads(env_value)
-        except json.JSONDecodeError as e:
-            raise DriveNotConfigured(
-                f"GOOGLE_CLIENT_SECRET_JSON 환경변수가 올바른 JSON이 아닙니다 ({e}). "
-                f"client_secret.json 파일 내용 전체를 다시 복사해서 넣어보세요."
-            ) from e
-    if CLIENT_SECRET_FILE.exists():
-        return json.loads(CLIENT_SECRET_FILE.read_text(encoding="utf-8"))
-    raise DriveNotConfigured(
-        f"Google OAuth 클라이언트 설정이 없습니다. GOOGLE_CLIENT_SECRET_JSON 환경변수를 설정하거나 "
-        f"{CLIENT_SECRET_FILE.name}을(를) 로컬에 두세요."
-    )
+def get_credentials() -> Credentials:
+    if not CLIENT_SECRET_FILE.exists():
+        raise DriveNotConfigured(
+            f"{CLIENT_SECRET_FILE.name}이(가) 없습니다. Google Cloud Console에서 OAuth 클라이언트(데스크톱 앱)를 "
+            f"만들어 다운로드한 뒤 {CLIENT_SECRET_FILE} 경로에 저장하세요."
+        )
 
-
-def _load_saved_token() -> Credentials | None:
-    env_value = (os.environ.get("GOOGLE_TOKEN_JSON") or "").strip()
-    if env_value:
-        try:
-            return Credentials.from_authorized_user_info(json.loads(env_value), SCOPES)
-        except json.JSONDecodeError as e:
-            raise DriveNotConfigured(
-                f"GOOGLE_TOKEN_JSON 환경변수가 올바른 JSON이 아닙니다 ({e}). "
-                f"token.json 파일 내용 전체를 다시 복사해서 넣어보세요."
-            ) from e
+    creds = None
     if TOKEN_FILE.exists():
-        return Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
-    return None
+        creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
 
-
-def _save_token(creds: Credentials) -> None:
-    # Cloud deploys get their token from an env var and typically have no
-    # durable disk to write back to, so only persist to disk locally.
-    if not os.environ.get("GOOGLE_TOKEN_JSON"):
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET_FILE), SCOPES)
+            creds = flow.run_local_server(port=0)
         TOKEN_FILE.write_text(creds.to_json(), encoding="utf-8")
 
-
-def get_credentials() -> Credentials:
-    creds = _load_saved_token()
-
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-        _save_token(creds)
-
-    if creds and creds.valid:
-        return creds
-
-    # No usable token yet: only viable interactively (opens a local browser).
-    # On a headless server this will fail fast rather than hang.
-    client_config = _load_client_config()
-    try:
-        flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
-        creds = flow.run_local_server(port=0)
-    except Exception as e:
-        raise DriveNotConfigured(
-            "저장된 Google 인증 토큰이 없고, 이 서버에서는 새로 브라우저 인증을 띄울 수 없습니다. "
-            "로컬에서 먼저 인증한 뒤 token.json 내용을 GOOGLE_TOKEN_JSON 환경변수로 설정하세요."
-        ) from e
-    _save_token(creds)
     return creds
 
 
