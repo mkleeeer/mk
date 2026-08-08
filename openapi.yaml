@@ -42,7 +42,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/DownloadResult"
 
   /api/images/download-batch:
     post:
@@ -77,6 +77,21 @@ paths:
             application/json:
               schema:
                 type: object
+                properties:
+                  success:
+                    type: boolean
+                  job_id:
+                    type: string
+                  total:
+                    type: integer
+                  succeeded:
+                    type: integer
+                  failed:
+                    type: integer
+                  results:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DownloadResult"
 
   /api/images/{image_id}:
     get:
@@ -94,7 +109,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/ImageRecord"
 
   /api/jobs/{job_id}:
     get:
@@ -113,6 +128,17 @@ paths:
             application/json:
               schema:
                 type: object
+                properties:
+                  id:
+                    type: string
+                  title:
+                    type: string
+                  created_at:
+                    type: string
+                  images:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ImageRecord"
 
   /api/drive/upload:
     post:
@@ -137,7 +163,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/ImageRecord"
 
   /api/drive/upload-job:
     post:
@@ -162,6 +188,23 @@ paths:
             application/json:
               schema:
                 type: object
+                properties:
+                  success:
+                    type: boolean
+                  job_id:
+                    type: string
+                  folder_id:
+                    type: string
+                  total:
+                    type: integer
+                  succeeded:
+                    type: integer
+                  failed:
+                    type: integer
+                  results:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ImageRecord"
 
 components:
   securitySchemes:
@@ -169,3 +212,78 @@ components:
       type: apiKey
       in: header
       name: X-API-Key
+  schemas:
+    ImageRecord:
+      type: object
+      properties:
+        success:
+          type: boolean
+        id:
+          type: string
+        file_id:
+          type: string
+        job_id:
+          type: string
+        seq:
+          type: integer
+        filename:
+          type: string
+        local_path:
+          type: string
+        original_path:
+          type: string
+        source_url:
+          type: string
+        source_page:
+          type: string
+        title:
+          type: string
+        caption:
+          type: string
+        mime_type:
+          type: string
+        width:
+          type: integer
+        height:
+          type: integer
+        created_at:
+          type: string
+        drive_file_id:
+          type: string
+        drive_url:
+          type: string
+        error:
+          type: string
+    DownloadResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        file_id:
+          type: string
+        url:
+          type: string
+        job_id:
+          type: string
+        filename:
+          type: string
+        local_path:
+          type: string
+        original_path:
+          type: string
+        source_url:
+          type: string
+        source_page:
+          type: string
+        title:
+          type: string
+        mime_type:
+          type: string
+        width:
+          type: integer
+        height:
+          type: integer
+        created_at:
+          type: string
+        error:
+          type: string
