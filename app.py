@@ -177,8 +177,11 @@ def api_queue_action():
     cfg = _QUEUE_SHEETS[sheet]
     try:
         if action == "discard":
-            for n in row_numbers:
-                sheets.update_row(SPREADSHEET_ID, sheet, n, {"status": "discarded"}, cfg["headers"])
+            sheets.update_rows(
+                SPREADSHEET_ID, sheet,
+                {n: {"status": "discarded"} for n in row_numbers},
+                cfg["headers"],
+            )
             return jsonify({"success": True, "handled": len(row_numbers)})
         elif action == "process":
             w = _workers[cfg["worker_name"]]

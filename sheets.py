@@ -121,11 +121,21 @@ def read_rows(spreadsheet_id: str, sheet_name: str, headers: list) -> list:
 
 
 def update_row(spreadsheet_id: str, sheet_name: str, row_number: int, updates: dict, headers: list) -> None:
+    update_rows(spreadsheet_id, sheet_name, {row_number: updates}, headers)
+
+
+def update_rows(spreadsheet_id: str, sheet_name: str, row_updates: dict, headers: list) -> None:
+    """Write the same or different field updates to many rows in a single API
+    call — looping update_row per row (one batchUpdate request each) is what
+    made bulk actions like "선택 항목 버리기" on 100+ rows feel frozen."""
+    if not row_updates:
+        return
     service = get_service()
     data = []
-    for key, value in updates.items():
-        col_letter = _col_letter(headers.index(key))
-        data.append({"range": f"{sheet_name}!{col_letter}{row_number}", "values": [[str(value)]]})
+    for row_number, updates in row_updates.items():
+        for key, value in updates.items():
+            col_letter = _col_letter(headers.index(key))
+            data.append({"range": f"{sheet_name}!{col_letter}{row_number}", "values": [[str(value)]]})
     _execute(service.spreadsheets().values().batchUpdate(
         spreadsheetId=spreadsheet_id,
         body={"valueInputOption": "RAW", "data": data},
