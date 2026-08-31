@@ -4,8 +4,8 @@ from datetime import datetime
 
 import net
 import sheets
-from app import extract_images_from_html
 from queue_config import POLL_SECONDS, SPREADSHEET_ID
+from scrape import extract_images_from_html
 
 
 def process_submission(row: dict) -> None:
@@ -16,12 +16,12 @@ def process_submission(row: dict) -> None:
     row_number = row["_row_number"]
 
     print(f"[extractor] processing row {row_number}: {url}")
-    sheets.update_row(
-        SPREADSHEET_ID, "submissions", row_number,
-        {"status": "processing"}, sheets.SUBMISSIONS_HEADERS,
-    )
 
     try:
+        sheets.update_row(
+            SPREADSHEET_ID, "submissions", row_number,
+            {"status": "processing"}, sheets.SUBMISSIONS_HEADERS,
+        )
         resp = net.fetch_page(url)
         resp.raise_for_status()
         content_type = resp.headers.get("Content-Type", "")
@@ -41,27 +41,26 @@ def process_submission(row: dict) -> None:
             return
 
         now = datetime.now().isoformat(timespec="seconds")
-        for i, cand in enumerate(candidates, start=1):
-            sheets.append_row(
-                SPREADSHEET_ID, "images",
-                {
-                    "id": f"cand_{uuid.uuid4().hex[:12]}",
-                    "submission_id": row.get("id", ""),
-                    "folder": folder,
-                    "seq": i,
-                    "source_url": cand["url"],
-                    "source_page": source_page or url,
-                    "title": title or cand.get("alt", ""),
-                    "status": "pending",
-                    "created_at": now,
-                    "updated_at": now,
-                },
-                sheets.IMAGES_HEADERS,
-            )
+        image_rows = [
+            {
+                "id": f"cand_{uuid.uuid4().hex[:12]}",
+                "submission_id": row.get("id", ""),
+                "folder": folder,
+                "seq": i,
+                "source_url": cand["url"],
+                "source_page": source_page or url,
+                "title": title or cand.get("alt", ""),
+                "status": "pending",
+                "created_at": now,
+                "updated_at": now,
+            }
+            for i, cand in enumerate(candidates, start=1)
+        ]
+        sheets.append_rows(SPREADSHEET_ID, "images", image_rows, sheets.IMAGES_HEADERS)
 
         sheets.update_row(
             SPREADSHEET_ID, "submissions", row_number,
-            {"status": "done"}, sheets.SUBMISSIONS_HEADERS,
+            {"status": "done", "error": ""}, sheets.SUBMISSIONS_HEADERS,
         )
         print(f"[extractor] row {row_number}: found {len(candidates)} image(s)")
 
@@ -73,12 +72,36 @@ def process_submission(row: dict) -> None:
         print(f"[extractor] row {row_number} failed: {e}")
 
 
-def run_once() -> int:
+def process_rows(row_numbers: set) -> int:
+    """Process exactly these rows (by sheet row number), regardless of their
+    current status — used by the web UI's selective/per-folder processing."""
+    rows = sheets.read_rows(SPREADSHEET_ID, "submissions", sheets.SUBMISSIONS_HEADERS)
+    targets = [r for r in rows if r["_row_number"] in row_numbers]
+    handled = 0
+    for row in targets:
+        try:
+            process_submission(row)
+        except Exception as e:
+            print(f"[extractor] row {row['_row_number']} unrecoverable: {e}")
+        handled += 1
+    return handled
+
+
+def run_once(stop_event=None) -> int:
     rows = sheets.read_rows(SPREADSHEET_ID, "submissions", sheets.SUBMISSIONS_HEADERS)
     pending = [r for r in rows if (r.get("status") or "").strip() in ("", "pending")]
+    handled = 0
     for row in pending:
-        process_submission(row)
-    return len(pending)
+        if stop_event is not None and stop_event.is_set():
+            break
+        # One row's failure (including a failed error-status write) must not
+        # stop the rest of the batch from being attempted.
+        try:
+            process_submission(row)
+        except Exception as e:
+            print(f"[extractor] row {row['_row_number']} unrecoverable: {e}")
+        handled += 1
+    return handled
 
 
 def main():

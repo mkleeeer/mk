@@ -1,0 +1,243 @@
+image-crawler-app — 핵심 논리와 구현 설명 (AI 인수인계용)
+================================================================
+
+1. 이 프로젝트가 존재하는 이유 (핵심 논리)
+----------------------------------------------------------------
+AI(어떤 AI든)는 웹에서 이미지를 "찾을" 수는 있지만, 그걸 실제 파일로
+"저장"할 수는 없다. 브라우저/채팅 환경에는 로컬 파일시스템 접근 권한이
+없기 때문이다. 이 앱은 그 사이를 잇는 다리다:
+
+    AI가 이미지 URL을 찾는다  →  이 앱이 실제로 다운로드해서 파일로 만든다
+
+추가로 두 가지 실질적인 문제도 해결한다:
+  - 사이트 차단: 많은 이미지 서버가 Referer/User-Agent를 검사해서 직접
+    요청을 막는다 → 서버가 브라우저인 척 헤더를 위장해서 대신 요청한다.
+  - 포맷 문제: AI가 찾은 이미지가 WebP/AVIF인 경우가 많아 바로 못 씀
+    → 다운로드 시 JPG/PNG로 자동 변환한다.
+
+
+2. AI가 이 앱을 "트리거"하는 두 가지 경로
+----------------------------------------------------------------
+어떤 경로를 쓸지는 그 AI가 로컬 컴퓨터를 직접 조작할 수 있는지로 갈린다.
+
+[경로 A] 로컬 실행 권한이 있는 AI (예: Claude Code)
+    사용자 요청 → AI가 웹 검색으로 URL 확보
+              → POST http://127.0.0.1:5000/api/images/download(-batch) 직접 호출
+              → 끝. 큐도 워커도 필요 없음.
+
+[경로 B] 브라우저 안에서만 도는 AI (claude.ai 웹, Gemini, ChatGPT 등)
+    이런 AI는 127.0.0.1(로컬 전용 주소)에 절대 닿을 수 없다. 대신 이들도
+    할 수 있는 유일한 것 — 구글 시트에 행 쓰기 — 를 다리로 쓴다.
+
+    AI → 구글 시트 "submissions" 탭에 행 추가 (status=pending)
+       → [로컬] Extractor Worker가 10초마다 감시하다가 발견
+       → 페이지 URL이면 그 안의 이미지들을 추출, 이미 이미지 URL이면 그대로
+       → "images" 탭에 후보로 등록 (status=pending)
+       → [로컬] Download Worker가 10초마다 감시하다가 발견
+       → 실제 다운로드 실행 → 상태를 downloaded/failed로 시트에 기록
+
+    스프레드시트 ID는 queue_config.py에 있음. 열 구조는 sheets.py의
+    SUBMISSIONS_HEADERS / IMAGES_HEADERS 참고.
+
+[경로 C] 사용자가 직접 (AI 없이)
+    웹 UI의 "URL 하나 바로 다운로드" 입력창에 이미지 URL을 붙여넣고
+    누르면 경로 A와 같은 /api/images/download를 그대로 호출한다.
+    큐/시트를 거치지 않는 가장 빠른 경로 — AI가 찾아준 URL을 그냥
+    사람이 눈으로 보고 즉시 저장하고 싶을 때 씀.
+
+
+3. 파일 구조 (역할별)
+----------------------------------------------------------------
+app.py              Flask 앱. 웹 UI 렌더링 + REST API + 워커 제어 API.
+scrape.py            페이지 HTML에서 이미지 URL 추출 (srcset 중 최대 크기 선택 등).
+                      app.py와 extractor_worker.py 둘 다 여기서 import
+                      (순환 임포트 방지를 위해 분리됨).
+net.py               HTTP 요청 담당. 브라우저 User-Agent 위장, 재시도,
+                      동시 요청 수 제한(세마포어).
+pipeline.py          다운로드 → 실제 포맷 판별(Pillow, AVIF 지원) →
+                      필요시 JPG/PNG 변환 → 로컬 저장 → registry.db 기록.
+db.py                로컬 SQLite(registry.db). 다운로드된 파일의 진짜
+                      메타데이터 저장소 (경로 A, B 공통으로 여기 기록됨).
+drive.py             구글 OAuth 인증 (Drive + Sheets 스코프 공용) +
+                      구글 드라이브 업로드.
+sheets.py            구글 시트 읽기/쓰기 래퍼. 재시도+백오프 내장,
+                      append_rows()로 여러 행을 한 번에 씀 (이유는 5번 참고).
+queue_config.py      스프레드시트 ID, 폴링 주기(10초).
+extractor_worker.py  큐의 1단계. run_once(stop_event)가 핵심 함수.
+download_worker.py   큐의 2단계. run_once(stop_event)가 핵심 함수.
+templates/index.html 웹 UI. 워커 제어판 + 수동 다운로드 + 페이지 스크래핑.
+run.bat              app.py 하나만 실행하면 끝 (워커는 이제 별도
+                      프로세스가 아니라 app.py 안의 스레드로 돎).
+
+
+4. 워커 제어판 (app.py 안에 있음, 별도 프로세스 아님)
+----------------------------------------------------------------
+UI에서 큐를 다루는 방식은 세 갈래로 나뉜다. 자동 감시(시작/정지) 하나로는
+"자동 처리는 느릴 수 있으니 URL 올라온 즉시 처리하고 싶다"거나 "쌓인 큐
+전체가 아니라 이 폴더 것만/이 행들만 처리하고 싶다" 같은 요구를 못
+채워서 아래 세 가지를 다 넣었다:
+
+  (a) 자동 감시 시작/정지 — threading.Event 기반 무한 루프. 켜두면
+      10초마다(POLL_SECONDS) 계속 미처리(pending) 행을 찾아 처리.
+  (b) "지금 처리" 버튼 — 자동 감시의 켜짐/꺼짐과 무관하게, 지금 큐에
+      있는 pending 행 전체를 즉시 한 번 처리(run_once). POST
+      /api/workers/<name>/run-once.
+  (c) 큐 목록(선택/폴더별 처리) 패널 — 큐를 실제로 표에 띄워서 보고
+      직접 고르는 기능. GET /api/queue/list로 최근 300행을 가져와
+      상태/폴더/에러를 표로 보여주고, 체크박스로 고른 행만
+      (POST /api/queue/action, action=process) 또는 폴더 드롭다운으로
+      걸러진 행 전체를 처리하거나, 필요없는 행은 버림(action=discard →
+      status=discarded로만 기록, 실제 파일이 있으면 지우지 않음).
+      백엔드는 extractor_worker.py/download_worker.py의
+      process_rows(row_numbers)가 담당 — run_once()와 달리 상태가
+      pending이 아니어도 지정된 행 번호는 무조건 다시 처리한다.
+  (d) 실패 원인별 통계 — 큐 목록을 불러올 때마다 status가 failed/error인
+      행들을 에러 메시지로 그룹핑해서(HTTP 코드, "이미지로 인식 불가",
+      "재시도 초과" 등 패턴 매칭) 건수와 예시를 보여준다
+      (templates/index.html의 errorSignature()/renderFailureBreakdown()).
+      코드를 고칠 때 어떤 실패가 제일 많은지 한눈에 보려고 만든 것.
+
+(a)(b)(c)의 "process" 액션 모두 같은 큐(같은 스프레드시트)를 건드리므로,
+워커별 threading.Lock(_workers[name]["busy"])으로 서로 겹쳐 돌지 않게
+막는다 — 자동 감시가 도는 중에 "지금 처리"나 "선택 항목 처리"를 눌러도
+두 실행이 동시에 같은 행을 집어가는 일이 없다(락을 못 잡으면 즉시
+실패 응답을 반환하고 재시도를 유도).
+처음엔 extractor_worker.py / download_worker.py를 run.bat에서 별도
+콘솔창으로 띄웠는데(각각 python 프로세스), 아래 문제들 때문에 지금은
+app.py 안의 threading.Thread로 통합했다:
+  - 별도 콘솔창은 사용자가 로그를 못 봄 (뭐가 되는지 안 보임)
+  - 항상 켜져있어서 원할 때만 켜고 끄는 제어가 안 됨
+  - Flask 디버그 리로더 + 반복 테스트로 python.exe 프로세스가 계속
+    쌓여서(최대 14개까지) 유령 프로세스가 뒤섞이는 문제 발생
+
+지금 구조:
+  - app.py 전역 딕셔너리 _workers = {"extractor": {...}, "download": {...}}
+  - 각 워커는 threading.Event(stop 신호) + threading.Thread로 관리
+  - API: POST /api/workers/<name>/start, /stop, GET /api/workers/status
+  - GET /api/queue/status — 시트의 submissions/images 각 상태별 개수 반환
+  - "정지"가 배치 처리 중간에도 즉시 먹히도록, run_once(stop_event)가
+    한 행 처리할 때마다 stop_event.is_set()을 확인하고 즉시 break함
+    (처음엔 이게 없어서 정지 눌러도 남은 배치를 다 처리할 때까지
+    안 멈추는 문제가 있었음 — 지금은 고쳐짐)
+
+app.py의 debug=True도 껐음 (Flask 리로더가 자식 프로세스를 계속
+새로 띄우는 게 위 프로세스 누적 문제의 원인 중 하나였음).
+
+
+5. 실제로 겪은 버그와 원인 (재발 방지용 기록)
+----------------------------------------------------------------
+[버그 1] 시트에 등록해도 자동 처리가 "멈춘 것처럼" 보임
+  원인: 이미지 후보를 시트에 append_row()로 한 줄씩 개별 API 호출했는데,
+        위키미디어 File: 페이지 하나가 수십~수백 개의 이미지 후보(아이콘,
+        로고, 중복 해상도 등)를 만들어내서 구글 시트 쓰기 할당량(분당
+        제한)을 순식간에 초과 → 429 에러.
+        거기다 에러 처리 코드에 구멍이 있어서, "처리중" 상태를 "실패"로
+        바꾸는 그 기록 자체도 같은 이유로 실패하면 예외가 상위로
+        전파되어 그 배치의 나머지 행들이 아예 시도조차 안 되고 멈춤.
+  해결: (a) append_rows()로 후보들을 한 번에 묶어서 씀 (호출 수 대폭 감소)
+        (b) sheets.py의 모든 쓰기에 재시도+백오프(exponential backoff) 추가
+        (c) 워커의 각 행 처리 로직 전체를 try/except로 감싸서, 한 행이
+            (에러 기록 실패까지 포함해서) 완전히 죽어도 나머지 행은
+            계속 처리되도록 방어.
+
+[버그 2] Wikimedia Commons "File:" 페이지 URL을 등록하면 쓰레기가 쏟아짐
+  원인: 이건 버그가 아니라 데이터 문제. File: 설명 페이지는 실제 사진
+        외에도 라이선스 아이콘, 로고, 다른 해상도 버전 등을 잔뜩 포함함.
+  해결(임시): submission_id로 묶어서, 그룹 내 width*height가 가장 큰
+        후보 하나만 남기고 나머지는 status=discarded로 정리 + 파일 삭제.
+  진짜 해결: 애초에 File: 페이지가 아니라 실제 이미지 파일 URL
+        (예: upload.wikimedia.org/.../파일명.jpg)을 등록해야 함.
+
+[버그 3] app.py가 extractor_worker.py를 import하면 순환 임포트 에러
+  원인: extractor_worker.py가 이미지 추출 함수를 app.py에서 가져다 썼는데,
+        app.py도 워커 제어를 위해 extractor_worker.py를 import하게 되면서
+        서로가 서로를 import하는 순환 구조가 됨.
+  해결: 이미지 추출 함수(extract_images_from_html, largest_from_srcset)를
+        scrape.py라는 독립 모듈로 분리. 양쪽 다 scrape.py에서 가져다 씀.
+
+[버그 4] python.exe 프로세스가 계속 쌓임 (최대 14개까지 확인됨)
+  원인: Flask debug=True의 자동 리로더가 파일 수정마다 자식 프로세스를
+        새로 띄우는데, 반복 테스트 중 taskkill로 깔끔히 정리 안 하고
+        다시 run.bat을 실행하는 걸 반복하면서 누적됨.
+  해결: debug=False로 전환. 워커도 스레드로 통합되면서 프로세스 자체가
+        하나(app.py)만 남게 됨.
+
+[버그 5] 큐 목록을 열면 가끔 "[SSL: WRONG_VERSION_NUMBER]" 500 에러
+  원인: sheets.py가 구글 API 서비스 객체(_service)를 모듈 전역에 하나만
+        캐싱해서 재사용했는데, 그 안의 httplib2 연결은 스레드 안전하지
+        않음. Flask가 threaded=True라 요청마다 다른 스레드에서 처리되고,
+        웹 UI가 /api/queue/status(4초 폴링)와 /api/queue/list를 거의
+        동시에 호출하면서 같은 소켓을 두 스레드가 동시에 건드려 SSL
+        레벨에서 깨짐.
+  해결: threading.local()로 서비스 객체를 스레드별로 따로 캐싱하도록
+        변경 (sheets.py의 _local). 이후 동시 요청 8개를 붙여서 재현 안
+        되는 것 확인.
+
+[버그 6] 테스트 중 구글 시트 "읽기" 할당량(분당 60회) 초과로 429
+  원인: /api/queue/status 하나가 매 호출마다 시트 읽기 2번(submissions +
+        images)을 하는데, 이걸 4초마다 폴링하면 그것만으로 분당 30회 —
+        워커 자동 감시(10초마다 워커당 1번, 최대 분당 12회)와 큐 목록
+        패널 로딩까지 겹치면 60회를 쉽게 넘김. (탭을 여러 개 띄워두면
+        각 탭이 따로 폴링하므로 그만큼 배로 늘어남 — 테스트 중 브라우저
+        탭 3개가 동시에 떠 있어서 재현됨.)
+  해결: 웹 UI의 refreshQueueStatus 폴링 주기를 4초 → 10초로 늘려서
+        평상시 여유를 확보. 근본적으로는 서버 쪽에서 몇 초간 결과를
+        캐싱하는 방법도 있는데, 아직 안 해도 될 만큼만 고쳐둔 상태.
+
+[버그 7] 서로 무관한 사이트(백악관/동아일보/가디언 등)에서 동시다발로
+         "[SSL: WRONG_VERSION_NUMBER]" / "bad record mac" 에러
+  원인: 사이트 차단이 아니라 클라이언트 쪽 문제였음. net.py가 구글
+        API처럼 requests.Session 하나를 전역으로 캐싱해서 Flask의 여러
+        스레드(요청 처리 스레드 + 워커 스레드)가 동시에 재사용했는데,
+        같은 클래스의 문제(버그 5, sheets.py)가 여기서도 재현된 것.
+        서로 다른 도메인에서 동시다발로 터진 게 "이건 사이트 문제가
+        아니다"라는 결정적 단서였음.
+  해결: net.py도 sheets.py와 동일하게 threading.local()로 스레드별
+        Session을 쓰도록 변경. 동시 요청 제한(fetch_limiter)도 4→2로
+        낮추고, 페이지 요청(fetch_page)도 이 제한을 받도록 함(이전엔
+        이미지 요청만 제한 걸려있었음). 이전에 이 에러로 실패했던 행
+        3개를 재처리해서 전부 정상 다운로드되는 것으로 확인.
+
+[버그 8] upload.wikimedia.org에서 세마포어를 걸어도 여전히 429
+  원인: 위키미디어는 다른 CDN보다 훨씬 엄격하게 rate limit을 걸어서,
+        전체 공용 동시 요청 제한(fetch_limiter)만으로는 부족했음.
+  해결: net.py에 도메인별(_STRICT_HOSTS) 전용 세마포어를 추가 —
+        upload.wikimedia.org/commons.wikimedia.org는 동시 1개로 더
+        강하게 제한, 재시도 backoff_factor도 0.4→0.8로 늘림. 이전에
+        429로 실패했던 위키미디어 행 5개를 재처리해서 더 이상 429가
+        아니라 (예상대로) "SVG는 지원 안 함"으로만 실패하는 것 확인 —
+        즉 rate limit 문제는 해결됐고, 남은 실패는 데이터 문제(원래
+        의도된 동작)임.
+
+[사소한 개선] 재처리 성공해도 이전 실패의 error 필드가 안 지워짐
+  원인: update_row()가 넘겨준 필드만 덮어쓰므로, 성공 시 status만
+        "downloaded"/"done"으로 바꾸고 error는 그대로 남아있었음.
+  해결: 성공 처리 시 error를 빈 문자열로 같이 씀
+        (extractor_worker.py의 process_submission,
+        download_worker.py의 process_image).
+
+
+6. 사이트 차단의 세 가지 다른 성격 (이거 헷갈리면 안 됨)
+----------------------------------------------------------------
+  (1) 리퍼러/UA 체크 (위키미디어, RoboForex 등)
+      → net.py의 헤더 위장으로 우회 가능.
+  (2) 전문 봇 탐지 (쿠팡, WSJ의 DataDome 등, 응답 헤더에 x-datadome 등)
+      → 절대 우회 불가. 사용자가 직접 로그인해서 이미지 URL을 복사해야 함.
+      단, 이런 사이트도 SNS 링크 미리보기용 이미지 CDN(예: images.wsj.net)
+      은 별도로 공개돼 있는 경우가 많아서, 그 직접 이미지 URL은 받아짐.
+  (3) 진짜 로그인 페이월 (WSJ 기사 본문 등, 401 응답)
+      → 이것도 우회 불가. 로그인 세션 자체가 없으면 방법이 없음.
+  (4) JS 렌더링 (핀터레스트 검색 결과, 구글 이미지 검색 등)
+      → 정적 HTML만 긁는 방식이라 페이지 로드 후 JS로 채워지는 이미지는
+      안 보임. 단, 서버사이드 렌더링되는 페이지(핀터레스트 보드/아이디어
+      페이지 등)는 잘 됨 — 사이트마다 다르니 실제로 테스트해봐야 함.
+
+
+7. 실행 방법
+----------------------------------------------------------------
+  1) image-crawler-app 폴더의 run.bat 더블클릭 → app.py 하나만 뜸,
+     브라우저가 자동으로 http://127.0.0.1:5000 을 엶.
+  2) 웹 UI에서 "자동 처리 워커" 섹션의 시작/정지 버튼으로 큐 감시 on/off.
+  3) 필요한 것: client_secret.json (구글 OAuth, git 제외됨),
+     최초 인증 시 token.json 자동 생성 (git 제외됨).
+  4) 저장소: https://github.com/mkleeeer/mk (이미 연결됨)

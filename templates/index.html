@@ -22,17 +22,123 @@
   .card label { display: flex; align-items: center; gap: 6px; padding: 6px 8px; font-size: 0.8rem; }
   .card .dl { display: block; text-align: center; padding: 6px; font-size: 0.78rem; background: #eee; text-decoration: none; color: #333; }
   .card .dl:hover { background: #ddd; }
+
+  section.panel { border: 1px solid #ddd; border-radius: 10px; padding: 16px 18px; margin-bottom: 24px; }
+  section.panel h2 { font-size: 1rem; margin: 0 0 12px; }
+  .worker-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid #eee; }
+  .worker-row:first-of-type { border-top: none; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #aaa; flex: none; }
+  .dot.running { background: #22c55e; }
+  .worker-name { min-width: 130px; font-weight: 600; }
+  .worker-state { color: #666; font-size: 0.85rem; min-width: 60px; }
+  .worker-row .spacer { flex: 1; }
+  button.small { padding: 6px 12px; font-size: 0.85rem; }
+  button.stop { background: #dc2626; }
+  button.stop:hover { background: #b91c1c; }
+  #queueSummary { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 12px; font-size: 0.85rem; color: #555; }
+  #queueSummary .col b { display: block; color: #111; font-size: 0.8rem; margin-bottom: 4px; }
+  #manualResult { margin-top: 10px; font-size: 0.88rem; }
+  #manualResult .ok { color: #16a34a; }
+  #manualResult .fail { color: #dc2626; }
+
+  .queue-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  select { padding: 8px 10px; border: 1px solid #999; border-radius: 6px; font-size: 0.9rem; background: white; }
+  .queue-table-wrap { max-height: 360px; overflow-y: auto; border: 1px solid #eee; border-radius: 6px; }
+  table.queue-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  table.queue-table th, table.queue-table td { padding: 6px 8px; text-align: left; border-bottom: 1px solid #eee; vertical-align: top; }
+  table.queue-table th { position: sticky; top: 0; background: #f7f7f7; }
+  table.queue-table td.url-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  table.queue-table td.err-cell { max-width: 220px; color: #b45309; font-size: 0.78rem; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 0.72rem; background: #eee; color: #555; }
+  .badge.pending, .badge.processing, .badge.downloading { background: #dbeafe; color: #1d4ed8; }
+  .badge.failed, .badge.error { background: #fee2e2; color: #b91c1c; }
+  .badge.done, .badge.downloaded { background: #dcfce7; color: #15803d; }
+  #failureBreakdown { margin-top: 14px; font-size: 0.82rem; }
+  #failureBreakdown table { width: 100%; border-collapse: collapse; }
+  #failureBreakdown td, #failureBreakdown th { padding: 4px 8px; border-bottom: 1px solid #f0f0f0; text-align: left; }
 </style>
 </head>
 <body>
   <h1>이미지 크롤러</h1>
-  <p style="color:#666; font-size:0.9rem;">웹페이지 주소(또는 이미지 직접 링크)를 입력하면 이미지들을 찾아서 보여줍니다. 사이트가 막아둔 경우에도 서버가 대신 요청해서 가져옵니다.</p>
 
-  <div class="row">
-    <input type="text" id="urlInput" placeholder="https://example.com/gallery">
-    <button id="searchBtn">이미지 찾기</button>
-  </div>
-  <div id="status"></div>
+  <section class="panel">
+    <h2>자동 처리 워커 (구글 시트 큐)</h2>
+    <div class="worker-row">
+      <span class="dot" id="dot-extractor"></span>
+      <span class="worker-name">Extractor Worker</span>
+      <span class="worker-state" id="state-extractor">정지됨</span>
+      <span class="spacer"></span>
+      <button class="small secondary" id="run-extractor">지금 처리</button>
+      <button class="small" id="start-extractor">시작</button>
+      <button class="small stop" id="stop-extractor">정지</button>
+    </div>
+    <div class="worker-row">
+      <span class="dot" id="dot-download"></span>
+      <span class="worker-name">Download Worker</span>
+      <span class="worker-state" id="state-download">정지됨</span>
+      <span class="spacer"></span>
+      <button class="small secondary" id="run-download">지금 처리</button>
+      <button class="small" id="start-download">시작</button>
+      <button class="small stop" id="stop-download">정지</button>
+    </div>
+    <div id="queueSummary"></div>
+    <p style="margin:10px 0 0; font-size:0.8rem; color:#888;">
+      "시작"은 10초마다 계속 감시, "지금 처리"는 자동 감시와 상관없이 지금 큐에 있는 걸 한 번만 바로 처리합니다.
+      <a id="sheetLink" href="{{ spreadsheet_url }}" target="_blank">구글 시트</a> 바로가기.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>큐 목록 (선택 / 폴더별 처리)</h2>
+    <div class="queue-controls">
+      <select id="queueSheet">
+        <option value="images">images (다운로드 대상)</option>
+        <option value="submissions">submissions (등록된 URL)</option>
+      </select>
+      <select id="queueFolder"><option value="">전체 폴더</option></select>
+      <label style="font-size:0.85rem; display:flex; align-items:center; gap:4px;">
+        <input type="checkbox" id="queueShowAll"> 완료/버림 포함
+      </label>
+      <button class="small secondary" id="queueReload">새로고침</button>
+      <span class="spacer" style="flex:1"></span>
+      <button class="small secondary" id="queueSelectAll">전체선택</button>
+      <button class="small secondary" id="queueSelectNone">선택해제</button>
+      <button class="small" id="queueProcessSelected">선택 항목 처리</button>
+      <button class="small" id="queueProcessFiltered">필터링된 전체 처리</button>
+      <button class="small stop" id="queueDiscardSelected">선택 항목 버리기</button>
+    </div>
+    <div id="queueTableMsg" style="font-size:0.82rem; color:#888; margin-bottom:6px;"></div>
+    <div class="queue-table-wrap">
+      <table class="queue-table">
+        <thead><tr>
+          <th style="width:24px;"><input type="checkbox" id="queueHeaderCheck"></th>
+          <th>row</th><th>id / url</th><th>folder</th><th>status</th><th>error</th>
+        </tr></thead>
+        <tbody id="queueTableBody"></tbody>
+      </table>
+    </div>
+    <div id="failureBreakdown"></div>
+  </section>
+
+  <section class="panel">
+    <h2>URL 하나 바로 다운로드</h2>
+    <div class="row">
+      <input type="text" id="manualUrl" placeholder="이미지 직접 링크">
+      <input type="text" id="manualFolder" placeholder="폴더명(선택)" style="flex:0 0 160px;">
+      <button id="manualBtn">다운로드</button>
+    </div>
+    <div id="manualResult"></div>
+  </section>
+
+  <section class="panel">
+    <h2>페이지에서 이미지 찾기</h2>
+    <p style="color:#666; font-size:0.9rem; margin-top:0;">웹페이지 주소(또는 이미지 직접 링크)를 입력하면 이미지들을 찾아서 보여줍니다. 사이트가 막아둔 경우에도 서버가 대신 요청해서 가져옵니다.</p>
+
+    <div class="row">
+      <input type="text" id="urlInput" placeholder="https://example.com/gallery">
+      <button id="searchBtn">이미지 찾기</button>
+    </div>
+    <div id="status"></div>
 
   <div id="toolbar" style="display:none;">
     <button class="secondary" id="selectAllBtn">전체 선택</button>
@@ -41,8 +147,226 @@
   </div>
 
   <div id="grid"></div>
+  </section>
 
 <script>
+// ---- 워커 제어판 ----
+async function refreshWorkerStatus() {
+  try {
+    const res = await fetch("/api/workers/status");
+    const data = await res.json();
+    for (const name of ["extractor", "download"]) {
+      const running = data[name] === "running";
+      document.getElementById(`dot-${name}`).classList.toggle("running", running);
+      document.getElementById(`state-${name}`).textContent = running ? "실행 중" : "정지됨";
+    }
+  } catch (e) { /* 서버 재시작 중일 수 있음, 다음 폴링에서 재시도 */ }
+}
+
+async function refreshQueueStatus() {
+  try {
+    const res = await fetch("/api/queue/status");
+    const data = await res.json();
+    if (data.error) return;
+    document.getElementById("sheetLink").href = data.spreadsheet_url;
+    const fmt = (label, obj) => {
+      const parts = Object.entries(obj.counts).map(([k, v]) => `${k} ${v}`).join(" · ") || "없음";
+      return `<div class="col"><b>${label} (${obj.total})</b>${parts}</div>`;
+    };
+    document.getElementById("queueSummary").innerHTML =
+      fmt("submissions", data.submissions) + fmt("images", data.images);
+  } catch (e) { /* ignore */ }
+}
+
+for (const name of ["extractor", "download"]) {
+  document.getElementById(`start-${name}`).onclick = async () => {
+    await fetch(`/api/workers/${name}/start`, { method: "POST" });
+    refreshWorkerStatus();
+  };
+  document.getElementById(`stop-${name}`).onclick = async () => {
+    await fetch(`/api/workers/${name}/stop`, { method: "POST" });
+    refreshWorkerStatus();
+  };
+  document.getElementById(`run-${name}`).onclick = async () => {
+    const btn = document.getElementById(`run-${name}`);
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "처리 중...";
+    try {
+      const res = await fetch(`/api/workers/${name}/run-once`, { method: "POST" });
+      const data = await res.json();
+      btn.textContent = data.success ? `${data.handled}개 처리함` : "실패";
+    } catch (e) {
+      btn.textContent = "실패";
+    } finally {
+      setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 2000);
+      refreshQueueStatus();
+    }
+  };
+}
+
+refreshWorkerStatus();
+refreshQueueStatus();
+setInterval(refreshWorkerStatus, 4000);
+// Sheets read quota is 60 requests/min/user; this alone costs 2 reads per
+// tick (submissions + images), so keep it slow enough to leave headroom for
+// the background workers' own polling and manual queue actions.
+setInterval(refreshQueueStatus, 10000);
+
+// ---- 큐 목록 (선택 / 폴더별 처리) ----
+let queueRows = [];
+
+function errorSignature(err) {
+  if (!err) return "";
+  const codeMatch = err.match(/\b(\d{3})\b/);
+  if (/cannot identify image file/i.test(err)) return "이미지로 인식 불가";
+  if (/Max retries exceeded|too many.*error responses/i.test(err)) return "재시도 초과 (CDN 차단/레이트리밋)";
+  if (/timed? ?out/i.test(err)) return "타임아웃";
+  if (codeMatch) return `HTTP ${codeMatch[1]}`;
+  return err.slice(0, 40);
+}
+
+function renderFailureBreakdown(rows) {
+  const failed = rows.filter(r => ["failed", "error"].includes(r.status));
+  if (failed.length === 0) {
+    document.getElementById("failureBreakdown").innerHTML = "";
+    return;
+  }
+  const groups = {};
+  for (const r of failed) {
+    const sig = errorSignature(r.error) || "(사유 없음)";
+    if (!groups[sig]) groups[sig] = { count: 0, example: r.error || "" };
+    groups[sig].count++;
+  }
+  const rowsHtml = Object.entries(groups)
+    .sort((a, b) => b[1].count - a[1].count)
+    .map(([sig, g]) => `<tr><td>${sig}</td><td>${g.count}건</td><td style="color:#888; max-width:400px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${g.example}</td></tr>`)
+    .join("");
+  document.getElementById("failureBreakdown").innerHTML =
+    `<b>실패 원인별 (총 ${failed.length}건)</b><table><thead><tr><th>원인</th><th>건수</th><th>예시</th></tr></thead><tbody>${rowsHtml}</tbody></table>`;
+}
+
+function filteredQueueRows() {
+  const folder = document.getElementById("queueFolder").value;
+  return folder ? queueRows.filter(r => r.folder === folder) : queueRows;
+}
+
+function renderQueueTable() {
+  const rows = filteredQueueRows();
+  const sheet = document.getElementById("queueSheet").value;
+  const urlField = sheet === "images" ? "source_url" : "url";
+  const tbody = document.getElementById("queueTableBody");
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td><input type="checkbox" class="qpick" data-row="${r._row_number}"></td>
+      <td>${r._row_number}</td>
+      <td class="url-cell" title="${(r[urlField] || "").replace(/"/g, "&quot;")}">${r.id || ""} — ${r[urlField] || ""}</td>
+      <td>${r.folder || ""}</td>
+      <td><span class="badge ${r.status}">${r.status || "(없음)"}</span></td>
+      <td class="err-cell" title="${(r.error || "").replace(/"/g, "&quot;")}">${r.error || ""}</td>
+    </tr>
+  `).join("");
+  document.getElementById("queueTableMsg").textContent = `${rows.length}개 표시 중`;
+  renderFailureBreakdown(rows);
+}
+
+async function loadQueue() {
+  const sheet = document.getElementById("queueSheet").value;
+  const showAll = document.getElementById("queueShowAll").checked ? "1" : "0";
+  document.getElementById("queueTableMsg").textContent = "불러오는 중...";
+  try {
+    const res = await fetch(`/api/queue/list?sheet=${sheet}&all=${showAll}`);
+    const data = await res.json();
+    if (data.error) { document.getElementById("queueTableMsg").textContent = "오류: " + data.error; return; }
+    queueRows = data.rows;
+    const folderSel = document.getElementById("queueFolder");
+    const current = folderSel.value;
+    folderSel.innerHTML = `<option value="">전체 폴더</option>` +
+      data.folders.map(f => `<option value="${f}">${f}</option>`).join("");
+    if (data.folders.includes(current)) folderSel.value = current;
+    renderQueueTable();
+    if (data.truncated) document.getElementById("queueTableMsg").textContent += " (300개까지만 표시됨)";
+  } catch (e) {
+    document.getElementById("queueTableMsg").textContent = "불러오기 실패: " + e;
+  }
+}
+
+async function runQueueAction(action, rowNumbers) {
+  if (rowNumbers.length === 0) { alert("대상이 없습니다."); return; }
+  document.getElementById("queueTableMsg").textContent = `${rowNumbers.length}개 처리 중...`;
+  const sheet = document.getElementById("queueSheet").value;
+  try {
+    const res = await fetch("/api/queue/action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sheet, action, row_numbers: rowNumbers })
+    });
+    const data = await res.json();
+    document.getElementById("queueTableMsg").textContent = data.success
+      ? `완료: ${data.handled}개 처리됨` : `실패: ${data.error}`;
+  } catch (e) {
+    document.getElementById("queueTableMsg").textContent = "요청 실패: " + e;
+  }
+  loadQueue();
+  refreshQueueStatus();
+}
+
+document.getElementById("queueSheet").onchange = loadQueue;
+document.getElementById("queueShowAll").onchange = loadQueue;
+document.getElementById("queueFolder").onchange = renderQueueTable;
+document.getElementById("queueReload").onclick = loadQueue;
+document.getElementById("queueHeaderCheck").onchange = (e) => {
+  document.querySelectorAll(".qpick").forEach(cb => cb.checked = e.target.checked);
+};
+document.getElementById("queueSelectAll").onclick = () => {
+  document.querySelectorAll(".qpick").forEach(cb => cb.checked = true);
+};
+document.getElementById("queueSelectNone").onclick = () => {
+  document.querySelectorAll(".qpick").forEach(cb => cb.checked = false);
+};
+document.getElementById("queueProcessSelected").onclick = () => {
+  const picked = [...document.querySelectorAll(".qpick:checked")].map(cb => parseInt(cb.dataset.row));
+  runQueueAction("process", picked);
+};
+document.getElementById("queueDiscardSelected").onclick = () => {
+  const picked = [...document.querySelectorAll(".qpick:checked")].map(cb => parseInt(cb.dataset.row));
+  runQueueAction("discard", picked);
+};
+document.getElementById("queueProcessFiltered").onclick = () => {
+  const all = filteredQueueRows().map(r => r._row_number);
+  runQueueAction("process", all);
+};
+
+loadQueue();
+
+// ---- URL 하나 바로 다운로드 ----
+document.getElementById("manualBtn").onclick = async () => {
+  const url = document.getElementById("manualUrl").value.trim();
+  const folder = document.getElementById("manualFolder").value.trim();
+  const resultEl = document.getElementById("manualResult");
+  if (!url) return;
+  resultEl.textContent = "다운로드 중...";
+  try {
+    const res = await fetch("/api/images/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, folder })
+    });
+    const data = await res.json();
+    if (data.success) {
+      resultEl.innerHTML = `<span class="ok">성공</span> — ${data.local_path} (${data.width}x${data.height})`;
+    } else {
+      resultEl.innerHTML = `<span class="fail">실패</span> — ${data.error}`;
+    }
+  } catch (e) {
+    resultEl.innerHTML = `<span class="fail">요청 실패</span> — ${e}`;
+  }
+};
+document.getElementById("manualUrl").addEventListener("keydown", e => {
+  if (e.key === "Enter") document.getElementById("manualBtn").click();
+});
+
+// ---- 페이지 스크래핑 ----
 let currentPageUrl = "";
 let currentImages = [];
 
