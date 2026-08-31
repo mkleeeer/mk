@@ -7,6 +7,40 @@ import sheets
 from queue_config import POLL_SECONDS, SPREADSHEET_ID
 from scrape import extract_images_from_html
 
+# Real-pixel-size thresholds for dropping obviously-junk candidates before
+# they're ever queued for download (icons, tracking pixels, thin banner
+# strips) — same shape of heuristic as newspaper3k's image scorer
+# (minimal_area / min width / max aspect ratio), tuned looser on the ratio
+# than newspaper3k's 16:9 since that would reject plenty of legitimate
+# portrait/landscape photos.
+MIN_CANDIDATE_AREA = 5000
+MIN_CANDIDATE_WIDTH = 80
+MAX_CANDIDATE_ASPECT_RATIO = 3.0
+
+
+def _passes_size_filter(dimensions) -> bool:
+    if dimensions is None:
+        return True  # couldn't determine size — don't punish it for that
+    width, height = dimensions
+    if width * height < MIN_CANDIDATE_AREA:
+        return False
+    if width < MIN_CANDIDATE_WIDTH:
+        return False
+    if max(width, height) / max(min(width, height), 1) > MAX_CANDIDATE_ASPECT_RATIO:
+        return False
+    return True
+
+
+def _filter_candidates_by_size(candidates: list, page_url: str) -> list:
+    kept = []
+    for cand in candidates:
+        dimensions = net.probe_image_dimensions(cand["url"], page_url)
+        if _passes_size_filter(dimensions):
+            kept.append(cand)
+        else:
+            print(f"[extractor] dropping small/odd-shaped candidate ({dimensions}): {cand['url']}")
+    return kept
+
 
 def process_submission(row: dict) -> None:
     url = (row.get("url") or "").strip()
@@ -32,6 +66,7 @@ def process_submission(row: dict) -> None:
             candidates = extract_images_from_html(resp.text, resp.url)
             if not source_page:
                 source_page = resp.url
+            candidates = _filter_candidates_by_size(candidates, resp.url)
 
         if not candidates:
             sheets.update_row(

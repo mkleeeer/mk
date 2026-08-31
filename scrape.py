@@ -1,7 +1,29 @@
 import re
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
+
+# Filenames/paths that are almost never the real content photo we want —
+# site logos, UI icons, social-share badges, tracking pixels. Checked
+# against the URL path only (not query string), case-insensitively, so a
+# real photo whose CDN happens to append "?ref=logo_page" isn't caught.
+# Based on the same kind of heuristics newspaper3k's image scorer and
+# common logo-scraper filename rules use.
+_JUNK_URL_PATTERNS = re.compile(
+    r"(icon|logo|sprite|badge|avatar|favicon|creativecommons|copyleft|public.?domain)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_junk(url: str) -> bool:
+    path = urlparse(url).path.lower()
+    # MediaWiki-style thumbnail URLs embed the *original* filename mid-path
+    # (.../thumb/2/22/Some_Badge.svg/250px-Some_Badge.svg.png) — any segment
+    # ending in .svg means the source was never a photo, regardless of what
+    # that particular badge/diagram happens to be named.
+    if any(seg.endswith(".svg") for seg in path.split("/")):
+        return True
+    return bool(_JUNK_URL_PATTERNS.search(path))
 
 
 def largest_from_srcset(srcset: str) -> str:
@@ -40,6 +62,8 @@ def extract_images_from_html(html: str, page_url: str):
         if absolute in seen:
             return
         seen.add(absolute)
+        if _looks_like_junk(absolute):
+            return
         found.append({"url": absolute, "alt": alt[:120]})
 
     for img in soup.find_all("img"):

@@ -1,8 +1,11 @@
+import io
 import threading
 from collections import defaultdict
+from contextlib import nullcontext
 from urllib.parse import urlparse
 
 import requests
+from PIL import Image
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -78,3 +81,47 @@ def fetch_image(image_url: str, page_url: str = "", stream: bool = False):
 def fetch_page(url: str):
     with fetch_limiter:
         return _session().get(url, headers=BROWSER_HEADERS, timeout=15)
+
+
+# How much of an image to download just to read its dimensions from the
+# header (JPEG/PNG/GIF/WebP all expose width/height within the first few KB)
+# — capped well below a real photo's size so probing a bad candidate is
+# cheap, unlike downloading it in full only to reject it afterwards.
+_DIMENSION_PROBE_CAP = 65536
+
+
+def probe_image_dimensions(image_url: str, page_url: str = ""):
+    """Peek at an image's real pixel size without downloading the whole
+    file, so obviously-too-small/oddly-shaped candidates (icons, tracking
+    pixels, thin banner strips) can be dropped before they ever cost a full
+    download. Returns (width, height), or None if it can't be determined
+    (e.g. truncated before Pillow could parse the header) — callers should
+    treat None as "unknown" and let the candidate through, not reject it."""
+    host_limiter = _limiter_for(image_url)
+    try:
+        with fetch_limiter:
+            with (host_limiter or nullcontext()):
+                resp = _session().get(
+                    image_url, headers=image_headers(image_url, page_url), timeout=8, stream=True,
+                )
+                try:
+                    resp.raise_for_status()
+                    buf = io.BytesIO()
+                    for chunk in resp.iter_content(chunk_size=4096):
+                        buf.write(chunk)
+                        if buf.tell() >= _DIMENSION_PROBE_CAP:
+                            break
+                        buf.seek(0)
+                        try:
+                            with Image.open(buf) as im:
+                                return im.size
+                        except Exception:
+                            # Not enough bytes yet to parse a header, or an
+                            # unrecognized/corrupt stream — either way, keep
+                            # buffering until the cap, then give up quietly.
+                            buf.seek(0, io.SEEK_END)
+                    return None
+                finally:
+                    resp.close()
+    except requests.RequestException:
+        return None

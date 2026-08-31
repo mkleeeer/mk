@@ -32,6 +32,7 @@ AI(어떤 AI든)는 웹에서 이미지를 "찾을" 수는 있지만, 그걸 실
     AI → 구글 시트 "submissions" 탭에 행 추가 (status=pending)
        → [로컬] Extractor Worker가 10초마다 감시하다가 발견
        → 페이지 URL이면 그 안의 이미지들을 추출, 이미 이미지 URL이면 그대로
+       → 아이콘/로고/뱃지로 보이는 후보는 등록 전에 걸러냄 (8번 참고)
        → "images" 탭에 후보로 등록 (status=pending)
        → [로컬] Download Worker가 10초마다 감시하다가 발견
        → 실제 다운로드 실행 → 상태를 downloaded/failed로 시트에 기록
@@ -241,3 +242,45 @@ app.py의 debug=True도 껐음 (Flask 리로더가 자식 프로세스를 계속
   3) 필요한 것: client_secret.json (구글 OAuth, git 제외됨),
      최초 인증 시 token.json 자동 생성 (git 제외됨).
   4) 저장소: https://github.com/mkleeeer/mk (이미 연결됨)
+
+
+8. 이미지 후보 필터링 (아이콘/로고/뱃지 거르기)
+----------------------------------------------------------------
+extractor가 페이지에서 뽑은 후보 중 실제 사진이 아닌 것(사이트 로고,
+CC/GNU 라이선스 뱃지, 추적용 1x1 픽셀 등)을 images 시트에 등록하기
+"전에" 미리 걸러낸다. newspaper3k(뉴스 기사 대표 이미지 추출로 널리
+쓰이는 라이브러리)의 이미지 스코어링 방식을 참고해서 만듦
+(newspaper/images.py — minimal_area, 최소 width, 가로세로 비율 초과시
+제외, "logo"/"sprite" 파일명은 감점).
+
+두 단계로 거른다 (extractor_worker.py):
+  1) URL 패턴 필터 (scrape.py의 _looks_like_junk) — 네트워크 비용 0.
+     - 경로의 어느 세그먼트든 .svg로 끝나면 제외. 이게 핵심 트릭인데,
+       미디어위키(위키미디어 계열) 썸네일 URL은
+       .../thumb/2/22/Some_Badge.svg/250px-Some_Badge.svg.png 처럼
+       원본 파일명을 경로 중간에 그대로 남겨두기 때문에, 뱃지 파일명이
+       "logo"나 "icon"을 안 써도(예: Cc-by_new_white.svg,
+       Heckert_GNU_white.svg 같은 CC/GNU 라이선스 뱃지) 이 규칙 하나로
+       다 걸러짐.
+     - 파일명/경로에 icon, logo, sprite, badge, avatar, favicon,
+       creativecommons, copyleft, public_domain 등이 들어가면 제외.
+  2) 실제 픽셀 크기 확인 (net.probe_image_dimensions) — 1번을 통과한
+     후보만 대상. 전체 다운로드 없이 앞부분 최대 64KB만 스트리밍으로
+     받아서 Pillow로 헤더만 파싱해 크기를 알아냄(대부분 포맷은 헤더가
+     파일 맨 앞 몇 KB 안에 있음). 아래 하나라도 걸리면 제외
+     (extractor_worker.py의 MIN_CANDIDATE_AREA 등 상수):
+       - 면적(가로*세로) < 5000px²
+       - 가로 < 80px
+       - max(가로,세로)/min(가로,세로) > 3.0 (얇은 배너/트래킹 픽셀류)
+     크기를 못 알아냈으면(캡 안에서 헤더 파싱 실패 등) 무조건 통과시킴
+     — "모르면 거른다"가 아니라 "모르면 통과"가 기본값. 오탐으로 진짜
+     사진을 놓치는 것보다, 가끔 쓰레기 하나 더 다운로드되는 게 낫다는
+     판단.
+
+실제 테스트(위키미디어 File: 페이지, 13개 원시 후보): 1번에서 CC/GNU
+라이선스 뱃지 4개 전부 제거, 2번에서 1x1 트래킹 픽셀 1개 추가 제거 →
+최종 8개 전부 같은 사진의 다른 해상도/과거 리비전(진짜 쓰레기 없음).
+
+주의: 이건 "쓰레기 제거"만 함. "같은 사진 여러 해상도 중 제일 큰 것만
+남기기"(위키미디어 버그 대응 때 했던 사후 정리)는 별개 기능이고 아직
+자동화 안 돼있음 — 필요하면 요청 바람.
