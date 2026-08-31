@@ -82,7 +82,18 @@
       <button class="small stop" id="stop-download">정지</button>
     </div>
     <div id="queueSummary"></div>
-    <p style="margin:10px 0 0; font-size:0.8rem; color:#888;">
+    <p style="margin:8px 0 0; font-size:0.78rem; color:#888; line-height:1.6;">
+      <b>용어:</b>
+      <b>pending</b>(대기 중, 아직 순서 안 옴) ·
+      <b>processing</b>(submissions: 페이지 읽고 이미지 뽑는 중) ·
+      <b>downloading</b>(images: 파일 받는 중) ·
+      <b>done</b>(submissions: 후보 등록까지 끝남 — 다운로드 완료란 뜻 아님) ·
+      <b>downloaded</b>(images: 파일로 저장 완료) ·
+      <b>error</b>(submissions: 페이지 접속/추출 실패) ·
+      <b>failed</b>(images: 다운로드 시도했지만 실패, 원인은 error 칸) ·
+      <b>discarded</b>(images: 다운로드 안 하고 제외 처리됨 — "버리기" 버튼 또는 정리 작업)
+    </p>
+    <p style="margin:6px 0 0; font-size:0.8rem; color:#888;">
       "시작"은 10초마다 계속 감시, "지금 처리"는 자동 감시와 상관없이 지금 큐에 있는 걸 한 번만 바로 처리합니다.
       <a id="sheetLink" href="{{ spreadsheet_url }}" target="_blank">구글 시트</a> 바로가기.
     </p>
