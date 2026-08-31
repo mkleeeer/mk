@@ -24,8 +24,17 @@ _local = threading.local()
 # burst of appends (one page can yield dozens of image candidates) can hit
 # 429s, so every call here retries with backoff instead of taking down the
 # whole worker loop over a transient rate limit.
+#
+# Each processed submission costs 2-3 writes (status=processing, then
+# status=done/error, plus an images append on success), so clearing a
+# backlog of pending submissions in one run_once() can itself burst past
+# the quota. Retries need to be patient enough to outlast a full quota
+# window (~60s), not just a transient blip — backoff is capped at 30s so a
+# single call never waits absurdly long, but 6 retries still adds up to
+# ~61s total, crossing one whole reset window.
 RETRYABLE_STATUSES = {429, 500, 503}
-MAX_RETRIES = 5
+MAX_RETRIES = 6
+_MAX_BACKOFF_SECONDS = 30
 
 
 def get_service():
@@ -41,7 +50,7 @@ def _execute(request):
         except HttpError as e:
             status = getattr(e.resp, "status", None)
             if status in RETRYABLE_STATUSES and attempt < MAX_RETRIES - 1:
-                time.sleep(2 ** attempt)
+                time.sleep(min(2 ** attempt, _MAX_BACKOFF_SECONDS))
                 continue
             raise
 

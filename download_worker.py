@@ -5,6 +5,11 @@ import pipeline
 import sheets
 from queue_config import POLL_SECONDS, SPREADSHEET_ID
 
+# Same reasoning as extractor_worker.py's _ROW_PACING_SECONDS — each row
+# costs 2 Sheets writes (status=downloading, then downloaded/failed), and a
+# batch of fast-failing rows (e.g. all 403s) can burst past the write quota.
+_ROW_PACING_SECONDS = 0.4
+
 
 def process_image(row: dict) -> None:
     row_number = row["_row_number"]
@@ -59,6 +64,7 @@ def process_rows(row_numbers: set) -> int:
         except Exception as e:
             print(f"[download] row {row['_row_number']} unrecoverable: {e}")
         handled += 1
+        time.sleep(_ROW_PACING_SECONDS)
     return handled
 
 
@@ -76,6 +82,7 @@ def run_once(stop_event=None) -> int:
         except Exception as e:
             print(f"[download] row {row['_row_number']} unrecoverable: {e}")
         handled += 1
+        time.sleep(_ROW_PACING_SECONDS)
     return handled
 
 

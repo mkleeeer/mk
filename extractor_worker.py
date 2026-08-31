@@ -19,6 +19,13 @@ MIN_CANDIDATE_AREA = 5000
 MIN_CANDIDATE_WIDTH = 80
 MAX_CANDIDATE_ASPECT_RATIO = 3.0
 
+# Each submission costs 2-3 Sheets write calls (status=processing, then
+# done/error, plus an images append on success). Clearing a large backlog
+# in one run_once() fires those back-to-back, which is what pushed the
+# write quota into sustained 429s even with retries. A small pause between
+# rows spreads writes out instead of bursting them.
+_ROW_PACING_SECONDS = 0.4
+
 
 def _passes_size_filter(dimensions) -> bool:
     if dimensions is None:
@@ -130,6 +137,7 @@ def process_rows(row_numbers: set) -> int:
         except Exception as e:
             print(f"[extractor] row {row['_row_number']} unrecoverable: {e}")
         handled += 1
+        time.sleep(_ROW_PACING_SECONDS)
     return handled
 
 
@@ -147,6 +155,7 @@ def run_once(stop_event=None) -> int:
         except Exception as e:
             print(f"[extractor] row {row['_row_number']} unrecoverable: {e}")
         handled += 1
+        time.sleep(_ROW_PACING_SECONDS)
     return handled
 
 
