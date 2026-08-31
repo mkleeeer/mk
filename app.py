@@ -33,12 +33,16 @@ _workers = {
 _workers_lock = threading.Lock()
 
 
-def _run_once_exclusive(name: str, **kwargs) -> int:
+def _run_once_exclusive(name: str, **kwargs):
     """Only one pass (auto-loop or manual button) runs at a time per worker,
-    so a manual click can't grab the same sheet row the loop is mid-processing."""
+    so a manual click can't grab the same sheet row the loop is mid-processing.
+    Returns None (not 0) when skipped because another pass is already running
+    — a big backlog can take minutes, and collapsing "already busy" into the
+    same 0 that "ran and found nothing pending" produces made the button look
+    broken on every repeat click while a long batch was still working."""
     w = _workers[name]
     if not w["busy"].acquire(blocking=False):
-        return 0
+        return None
     try:
         return w["run_once"](**kwargs)
     finally:
@@ -101,6 +105,11 @@ def api_workers_run_once(name):
         handled = _run_once_exclusive(name)
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+    if handled is None:
+        return jsonify({
+            "success": False, "busy": True,
+            "error": "이미 처리 중입니다 (앞선 배치가 아직 끝나지 않음). 잠시 후 다시 시도하세요.",
+        }), 409
     return jsonify({"success": True, "handled": handled})
 
 
