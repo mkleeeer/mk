@@ -14,7 +14,7 @@ import db
 import net
 
 BASE_DIR = Path(__file__).parent
-DOWNLOADS_DIR = BASE_DIR / "downloads"
+DOWNLOADS_DIR = Path(r"G:\내 드라이브\[작업공간]\웹이미지 수집")
 KEEP_ORIGINAL = os.environ.get("IMAGE_KEEP_ORIGINAL", "1") != "0"
 
 # Formats Pillow can decode. Anything outside this set (or that fails to
@@ -34,7 +34,7 @@ class DownloadError(Exception):
 
 
 def _relpath(path: Path) -> str:
-    return str(path.relative_to(BASE_DIR)).replace("\\", "/")
+    return str(path.relative_to(DOWNLOADS_DIR)).replace("\\", "/")
 
 
 def download_and_process(url: str, source_page: str = "", title: str = "", folder: str = "") -> dict:

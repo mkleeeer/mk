@@ -57,6 +57,16 @@ net.py               HTTP 요청 담당. 브라우저 User-Agent 위장, 재시�
                       동시 요청 수 제한(세마포어).
 pipeline.py          다운로드 → 실제 포맷 판별(Pillow, AVIF 지원) →
                       필요시 JPG/PNG 변환 → 로컬 저장 → registry.db 기록.
+                      저장 위치(DOWNLOADS_DIR)는 앱 폴더 안이 아니라
+                      "G:\내 드라이브\[작업공간]\웹이미지 수집" — 구글
+                      드라이브 데스크톱 동기화 폴더 안이라, 다운로드되는
+                      즉시 자동으로 구글 드라이브에도 올라감(별도로
+                      "구글 드라이브 업로드" API 안 써도 됨). registry.db의
+                      local_path/original_path는 이 DOWNLOADS_DIR 기준
+                      상대경로로 저장됨 — 예전엔 app.py 폴더 안
+                      downloads/였다가 옮겨짐(2026-08-31), 그때 기존
+                      827개 레코드의 경로 앞부분("downloads/")도 실제
+                      파일 위치에 맞게 SQL로 일괄 수정함.
 db.py                로컬 SQLite(registry.db). 다운로드된 파일의 진짜
                       메타데이터 저장소 (경로 A, B 공통으로 여기 기록됨).
 drive.py             구글 OAuth 인증 (Drive + Sheets 스코프 공용) +

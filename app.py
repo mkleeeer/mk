@@ -398,7 +398,7 @@ def api_get_job(job_id):
 def _upload_one(record: dict, parent_id: str) -> dict:
     if record["drive_file_id"]:
         return {"success": True, "file_id": record["id"], **record}
-    local_path = pipeline.BASE_DIR / record["local_path"]
+    local_path = pipeline.DOWNLOADS_DIR / record["local_path"]
     result = drive.upload_file(
         local_path=str(local_path),
         filename=record["filename"],
