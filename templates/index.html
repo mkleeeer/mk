@@ -81,6 +81,20 @@
       <button class="small" id="start-download">시작</button>
       <button class="small stop" id="stop-download">정지</button>
     </div>
+    <div style="margin-top:14px; padding:10px 12px; background:#f8fafc; border:1px solid #e5e7eb; border-radius:6px;">
+      <label style="display:flex; align-items:center; gap:8px; font-weight:600; cursor:pointer;">
+        <input type="checkbox" id="onlyOgImage">
+        대표 이미지만 추출 (og:image)
+      </label>
+      <p style="margin:6px 0 0; font-size:0.8rem; color:#666; line-height:1.5;">
+        <b>이 기능은:</b> 페이지의 모든 이미지(아이콘, 사이드바의 다른 기사 썸네일 등)를
+        긁어오는 대신, 그 사이트가 SNS/검색엔진 미리보기용으로 직접 지정해둔
+        대표 사진(og:image 메타태그) 딱 하나만 후보로 등록합니다.
+        켜면 페이지당 최대 1장만 등록되고, og:image가 없는 페이지는
+        "대표 이미지가 없음" 오류로 처리됩니다(다른 이미지로 대체 안 함).
+        Extractor Worker가 다음번 처리부터 이 설정을 그대로 씁니다(자동 감시 중이어도 즉시 적용).
+      </p>
+    </div>
     <div id="queueSummary"></div>
     <p style="margin:8px 0 0; font-size:0.78rem; color:#888; line-height:1.6;">
       <b>용어:</b>
@@ -215,6 +229,22 @@ for (const name of ["extractor", "download"]) {
     }
   };
 }
+
+async function loadExtractionMode() {
+  try {
+    const res = await fetch("/api/settings/extraction-mode");
+    const data = await res.json();
+    document.getElementById("onlyOgImage").checked = !!data.only_og_image;
+  } catch (e) { /* ignore */ }
+}
+document.getElementById("onlyOgImage").onchange = async (e) => {
+  await fetch("/api/settings/extraction-mode", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ only_og_image: e.target.checked }),
+  });
+};
+loadExtractionMode();
 
 refreshWorkerStatus();
 refreshQueueStatus();

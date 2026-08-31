@@ -3,9 +3,11 @@ import uuid
 from datetime import datetime
 
 import net
+import settings
 import sheets
 from queue_config import POLL_SECONDS, SPREADSHEET_ID
-from scrape import extract_images_from_html
+from scrape import extract_images_from_html, find_og_image
+from bs4 import BeautifulSoup
 
 # Real-pixel-size thresholds for dropping obviously-junk candidates before
 # they're ever queued for download (icons, tracking pixels, thin banner
@@ -62,6 +64,11 @@ def process_submission(row: dict) -> None:
 
         if content_type.startswith("image/"):
             candidates = [{"url": url, "alt": title}]
+        elif settings.get_only_og_image():
+            if not source_page:
+                source_page = resp.url
+            og_url = find_og_image(BeautifulSoup(resp.text, "html.parser"), resp.url)
+            candidates = [{"url": og_url, "alt": title}] if og_url else []
         else:
             candidates = extract_images_from_html(resp.text, resp.url)
             if not source_page:
@@ -69,9 +76,13 @@ def process_submission(row: dict) -> None:
             candidates = _filter_candidates_by_size(candidates, resp.url)
 
         if not candidates:
+            no_image_reason = (
+                "대표 이미지(og:image)가 없는 페이지입니다."
+                if settings.get_only_og_image() else "이미지를 찾지 못했습니다."
+            )
             sheets.update_row(
                 SPREADSHEET_ID, "submissions", row_number,
-                {"status": "error", "error": "이미지를 찾지 못했습니다."}, sheets.SUBMISSIONS_HEADERS,
+                {"status": "error", "error": no_image_reason}, sheets.SUBMISSIONS_HEADERS,
             )
             return
 

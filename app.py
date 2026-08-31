@@ -13,6 +13,7 @@ import drive
 import extractor_worker
 import net
 import pipeline
+import settings
 import sheets
 from queue_config import POLL_SECONDS, SPREADSHEET_ID, SPREADSHEET_URL
 from scrape import extract_images_from_html
@@ -141,6 +142,18 @@ _QUEUE_SHEETS = {
 # Rows in these statuses are done and not worth listing by default — the UI
 # only shows what's still actionable unless asked to include everything.
 _TERMINAL_STATUSES = {"done", "downloaded", "discarded"}
+
+
+@app.route("/api/settings/extraction-mode")
+def api_get_extraction_mode():
+    return jsonify({"only_og_image": settings.get_only_og_image()})
+
+
+@app.route("/api/settings/extraction-mode", methods=["POST"])
+def api_set_extraction_mode():
+    data = request.get_json(force=True) or {}
+    value = settings.set_only_og_image(bool(data.get("only_og_image")))
+    return jsonify({"success": True, "only_og_image": value})
 
 
 @app.route("/api/queue/list")

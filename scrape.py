@@ -47,6 +47,20 @@ def largest_from_srcset(srcset: str) -> str:
     return candidates[0][1]
 
 
+def find_og_image(soup: BeautifulSoup, page_url: str) -> str:
+    """The page's publisher-declared representative photo (what shows up as
+    the preview when the page is shared on social media / search results) —
+    the closest thing to "already knows which image is the real one",
+    since it's a single deliberate choice by the site, not every <img> tag
+    on the page treated as equally likely to be the content photo."""
+    for meta_name in ("og:image", "twitter:image"):
+        tag = soup.find("meta", property=meta_name) or soup.find("meta", attrs={"name": meta_name})
+        content = tag.get("content") if tag else None
+        if content and not content.strip().startswith("data:"):
+            return urljoin(page_url, content.strip())
+    return ""
+
+
 def extract_images_from_html(html: str, page_url: str):
     soup = BeautifulSoup(html, "html.parser")
     found = []
@@ -92,9 +106,8 @@ def extract_images_from_html(html: str, page_url: str):
         if m:
             add(m.group(1).strip("'\""))
 
-    for meta_name in ("og:image", "twitter:image"):
-        tag = soup.find("meta", property=meta_name) or soup.find("meta", attrs={"name": meta_name})
-        if tag and tag.get("content"):
-            add(tag["content"])
+    og_image = find_og_image(soup, page_url)
+    if og_image:
+        add(og_image)
 
     return found
