@@ -1,0 +1,97 @@
+import time
+import uuid
+from datetime import datetime
+
+import net
+import sheets
+from app import extract_images_from_html
+from queue_config import POLL_SECONDS, SPREADSHEET_ID
+
+
+def process_submission(row: dict) -> None:
+    url = (row.get("url") or "").strip()
+    folder = row.get("folder") or ""
+    source_page = row.get("source_page") or ""
+    title = row.get("title") or ""
+    row_number = row["_row_number"]
+
+    print(f"[extractor] processing row {row_number}: {url}")
+    sheets.update_row(
+        SPREADSHEET_ID, "submissions", row_number,
+        {"status": "processing"}, sheets.SUBMISSIONS_HEADERS,
+    )
+
+    try:
+        resp = net.fetch_page(url)
+        resp.raise_for_status()
+        content_type = resp.headers.get("Content-Type", "")
+
+        if content_type.startswith("image/"):
+            candidates = [{"url": url, "alt": title}]
+        else:
+            candidates = extract_images_from_html(resp.text, resp.url)
+            if not source_page:
+                source_page = resp.url
+
+        if not candidates:
+            sheets.update_row(
+                SPREADSHEET_ID, "submissions", row_number,
+                {"status": "error", "error": "이미지를 찾지 못했습니다."}, sheets.SUBMISSIONS_HEADERS,
+            )
+            return
+
+        now = datetime.now().isoformat(timespec="seconds")
+        for i, cand in enumerate(candidates, start=1):
+            sheets.append_row(
+                SPREADSHEET_ID, "images",
+                {
+                    "id": f"cand_{uuid.uuid4().hex[:12]}",
+                    "submission_id": row.get("id", ""),
+                    "folder": folder,
+                    "seq": i,
+                    "source_url": cand["url"],
+                    "source_page": source_page or url,
+                    "title": title or cand.get("alt", ""),
+                    "status": "pending",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+                sheets.IMAGES_HEADERS,
+            )
+
+        sheets.update_row(
+            SPREADSHEET_ID, "submissions", row_number,
+            {"status": "done"}, sheets.SUBMISSIONS_HEADERS,
+        )
+        print(f"[extractor] row {row_number}: found {len(candidates)} image(s)")
+
+    except Exception as e:
+        sheets.update_row(
+            SPREADSHEET_ID, "submissions", row_number,
+            {"status": "error", "error": str(e)[:300]}, sheets.SUBMISSIONS_HEADERS,
+        )
+        print(f"[extractor] row {row_number} failed: {e}")
+
+
+def run_once() -> int:
+    rows = sheets.read_rows(SPREADSHEET_ID, "submissions", sheets.SUBMISSIONS_HEADERS)
+    pending = [r for r in rows if (r.get("status") or "").strip() in ("", "pending")]
+    for row in pending:
+        process_submission(row)
+    return len(pending)
+
+
+def main():
+    print(f"[extractor] watching {SPREADSHEET_ID} every {POLL_SECONDS}s")
+    while True:
+        try:
+            n = run_once()
+            if n:
+                print(f"[extractor] handled {n} submission(s)")
+        except Exception as e:
+            print(f"[extractor] loop error: {e}")
+        time.sleep(POLL_SECONDS)
+
+
+if __name__ == "__main__":
+    main()
