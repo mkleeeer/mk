@@ -88,18 +88,18 @@ def insert_image(record: dict) -> None:
         )
 
 
-def get_image(image_id: str) -> dict | None:
-    with get_conn() as conn:
-        row = conn.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
-    return dict(row) if row else None
-
-
 def update_image_drive(image_id: str, drive_file_id: str, drive_url: str) -> None:
     with get_conn() as conn:
         conn.execute(
             "UPDATE images SET drive_file_id = ?, drive_url = ? WHERE id = ?",
             (drive_file_id, drive_url, image_id),
         )
+
+
+def get_image(image_id: str) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
+    return dict(row) if row else None
 
 
 def get_job(job_id: str) -> dict | None:

@@ -10,7 +10,11 @@ BASE_DIR = Path(__file__).parent
 CLIENT_SECRET_FILE = BASE_DIR / "client_secret.json"
 TOKEN_FILE = BASE_DIR / "token.json"
 # drive.file: the app can only see/manage files *it* creates, not the user's whole Drive.
-SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+# spreadsheets: read/write the queue sheet used by the extractor/download workers.
+SCOPES = [
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/spreadsheets",
+]
 
 
 class DriveNotConfigured(Exception):
