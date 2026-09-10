@@ -102,6 +102,15 @@ def get_image(image_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def list_by_mime_prefix(prefix: str, limit: int = 200) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM images WHERE mime_type LIKE ? ORDER BY created_at DESC LIMIT ?",
+            (f"{prefix}%", limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_job(job_id: str) -> dict | None:
     with get_conn() as conn:
         job_row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()

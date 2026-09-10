@@ -225,6 +225,16 @@ def index():
     return render_template("index.html", spreadsheet_url=SPREADSHEET_URL)
 
 
+@app.route("/pdf")
+def pdf_page():
+    return render_template("pdf.html")
+
+
+@app.route("/api/pdfs/recent")
+def api_pdfs_recent():
+    return jsonify({"pdfs": db.list_by_mime_prefix("application/pdf")})
+
+
 @app.route("/extract", methods=["POST"])
 def extract():
     data = request.get_json(force=True)
