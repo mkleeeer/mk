@@ -1,5 +1,8 @@
+import hashlib
 import io
+import json
 import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -96,6 +99,59 @@ def _log_fetch_failure(url: str, reason: str, resp=None) -> None:
     status = resp.status_code if resp is not None else "-"
     ctype = resp.headers.get("Content-Type", "-") if resp is not None else "-"
     print(f"[pipeline] fetch failed: {reason} | url={url} final_url={final_url} status={status} content-type={ctype}")
+
+
+def _diagnose_unknown_response(raw: bytes, url: str, resp, decode_error: Exception) -> str:
+    """Preserve evidence before reporting an unrecognized response.
+
+    Samples use escaped JSON so control characters cannot corrupt terminal
+    output. The .bin contains the entire response.content, without conversion
+    (requests may already have decompressed HTTP Content-Encoding).
+    """
+    sample = raw[:512]
+    details = {
+        "url": url,
+        "final_url": resp.url,
+        "status": resp.status_code,
+        "headers": {name: resp.headers.get(name, "") for name in (
+            "Content-Type", "Content-Length", "Content-Disposition",
+            "Content-Encoding", "Transfer-Encoding", "Server",
+        )},
+        "redirects": [{"url": hop.url, "status": hop.status_code}
+                      for hop in resp.history],
+        "body_bytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "decoder_error": type(decode_error).__name__,
+        "sample_bytes": len(sample),
+        "sample_hex": sample.hex(),
+        "sample_utf8": sample.decode("utf-8", errors="replace"),
+        "sample_latin1": sample.decode("latin-1"),
+    }
+    # Print evidence even if the filesystem is full/unwritable.
+    print("[pipeline] UNKNOWN_BINARY diagnostics: " + json.dumps(details, ensure_ascii=True), flush=True)
+    if os.environ.get("UNKNOWN_BINARY_SAVE_RAW", "1") == "0":
+        print("[pipeline] UNKNOWN_BINARY raw saving disabled", flush=True)
+        return "원본 임시 저장 꺼짐 (UNKNOWN_BINARY_SAVE_RAW=0)"
+
+    try:
+        configured_dir = os.environ.get("UNKNOWN_BINARY_DIAGNOSTICS_DIR")
+        diagnostic_dir = (Path(configured_dir) if configured_dir else
+                          Path(tempfile.gettempdir()) / "image-crawler-diagnostics")
+        diagnostic_dir.mkdir(parents=True, exist_ok=True)
+        # Exclusive unique names keep concurrent workers/retries from overwriting evidence.
+        with tempfile.NamedTemporaryFile(
+            mode="wb", prefix="unknown-", suffix=".bin", dir=diagnostic_dir, delete=False,
+        ) as output:
+            output.write(raw)
+            saved_path = str(Path(output.name).resolve())
+    except OSError as exc:
+        print("[pipeline] UNKNOWN_BINARY raw save failed: " +
+              json.dumps({"error": str(exc)}, ensure_ascii=True), flush=True)
+        return "원본 임시 저장 실패 (진단 로그 확인)"
+
+    print("[pipeline] UNKNOWN_BINARY raw saved: " +
+          json.dumps({"path": saved_path, "body_bytes": len(raw)}, ensure_ascii=True), flush=True)
+    return f"원본 임시 저장: {saved_path}"
 
 
 def _fetch_url(url: str, cookies: dict | None = None):
@@ -213,18 +269,15 @@ def download_and_process(
     try:
         im = Image.open(io.BytesIO(raw))
         im.load()
-    except Exception:
-        # Not PDF, not HTML, not ZIP/EPUB, not DjVu, and Pillow — which
-        # does its own signature-based format sniffing, not extension or
-        # Content-Type — doesn't recognize it either. Genuinely unknown,
-        # not a bug to chase: report it as exactly that instead of leaking
-        # Pillow's raw "cannot identify image file <...>" exception text.
+    except Exception as exc:
+        # Unknown may be text, a damaged file, or an unsupported format.
+        # Keep the evidence for inspection instead of declaring it unsupported.
         signature = raw[:8].hex()
-        _log_fetch_failure(url, "unknown binary signature", resp)
+        diagnostic_result = _diagnose_unknown_response(raw, url, resp, exc)
         raise DownloadError(
             f"UNKNOWN_BINARY (Content-Type: {content_type or 'unknown'}, signature: {signature}): "
-            f"지원하지 않는 파일 형식입니다."
-        )
+            f"응답 형식을 식별하지 못했습니다. 첫 512바이트 진단 로그 확인. {diagnostic_result}"
+        ) from exc
 
     fmt = im.format or "JPEG"
     orig_ext = FORMAT_EXT.get(fmt, "bin")
