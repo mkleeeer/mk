@@ -37,6 +37,38 @@ def _relpath(path: Path) -> str:
     return str(path.relative_to(DOWNLOADS_DIR)).replace("\\", "/")
 
 
+def _save_pdf(raw: bytes, url: str, source_page: str, title: str, job_id: str) -> dict:
+    job_dir = DOWNLOADS_DIR / job_id
+    converted_dir = job_dir / "converted"
+    converted_dir.mkdir(parents=True, exist_ok=True)
+
+    job_seq = db.next_job_seq(job_id)
+    daily_seq = db.next_daily_seq()
+    out_path = converted_dir / f"{job_seq:02d}.pdf"
+    out_path.write_bytes(raw)
+
+    record = {
+        "id": f"pdf_{datetime.now():%Y%m%d}_{daily_seq:03d}",
+        "job_id": job_id,
+        "seq": job_seq,
+        "filename": out_path.name,
+        "local_path": _relpath(out_path),
+        "original_path": None,
+        "source_url": url,
+        "source_page": source_page or None,
+        "title": title or None,
+        "caption": None,
+        "mime_type": "application/pdf",
+        "width": None,
+        "height": None,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "drive_file_id": None,
+        "drive_url": None,
+    }
+    db.insert_image(record)
+    return record
+
+
 def download_and_process(url: str, source_page: str = "", title: str = "", folder: str = "") -> dict:
     if not url:
         raise DownloadError("url이 필요합니다.")
@@ -50,12 +82,19 @@ def download_and_process(url: str, source_page: str = "", title: str = "", folde
         raise DownloadError(f"다운로드 실패: {e}") from e
 
     raw = resp.content
+
+    # PDF check comes first and by magic bytes, not Content-Type header — same
+    # "never trust the header" reasoning as the image path below (a blocked
+    # request can come back as an HTML page with an image/pdf Content-Type).
+    if raw[:5] == b"%PDF-":
+        return _save_pdf(raw, url, source_page, title, job_id)
+
     try:
         im = Image.open(io.BytesIO(raw))
         im.load()
     except Exception as e:
         content_type = resp.headers.get("Content-Type", "unknown")
-        raise DownloadError(f"이미지로 인식할 수 없습니다 (Content-Type: {content_type}): {e}") from e
+        raise DownloadError(f"이미지나 PDF로 인식할 수 없습니다 (Content-Type: {content_type}): {e}") from e
 
     fmt = im.format or "JPEG"
     orig_ext = FORMAT_EXT.get(fmt, "bin")
