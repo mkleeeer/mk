@@ -40,18 +40,22 @@ def _relpath(path: Path) -> str:
     return str(path.relative_to(DOWNLOADS_DIR)).replace("\\", "/")
 
 
-def _save_pdf(raw: bytes, url: str, source_page: str, title: str, job_id: str) -> dict:
+def _save_raw(raw: bytes, ext: str, mime_type: str, id_prefix: str, url: str, source_page: str, title: str, job_id: str) -> dict:
+    """Save a non-image file whose real type was determined by signature
+    (magic bytes), not by trusting the URL extension or Content-Type —
+    shared by PDF/EPUB-ZIP/DjVu, which all just need "write the bytes,
+    record it" with no format-specific processing the way images do."""
     job_dir = DOWNLOADS_DIR / job_id
     converted_dir = job_dir / "converted"
     converted_dir.mkdir(parents=True, exist_ok=True)
 
     job_seq = db.next_job_seq(job_id)
     daily_seq = db.next_daily_seq()
-    out_path = converted_dir / f"{job_seq:02d}.pdf"
+    out_path = converted_dir / f"{job_seq:02d}.{ext}"
     out_path.write_bytes(raw)
 
     record = {
-        "id": f"pdf_{datetime.now():%Y%m%d}_{daily_seq:03d}",
+        "id": f"{id_prefix}_{datetime.now():%Y%m%d}_{daily_seq:03d}",
         "job_id": job_id,
         "seq": job_seq,
         "filename": out_path.name,
@@ -61,7 +65,7 @@ def _save_pdf(raw: bytes, url: str, source_page: str, title: str, job_id: str) -
         "source_page": source_page or None,
         "title": title or None,
         "caption": None,
-        "mime_type": "application/pdf",
+        "mime_type": mime_type,
         "width": None,
         "height": None,
         "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -70,6 +74,18 @@ def _save_pdf(raw: bytes, url: str, source_page: str, title: str, job_id: str) -
     }
     db.insert_image(record)
     return record
+
+
+def _save_pdf(raw: bytes, url: str, source_page: str, title: str, job_id: str) -> dict:
+    return _save_raw(raw, "pdf", "application/pdf", "pdf", url, source_page, title, job_id)
+
+
+def _looks_like_epub(raw: bytes) -> bool:
+    # EPUB is a ZIP whose very first entry is an uncompressed "mimetype"
+    # file containing exactly "application/epub+zip" — cheap to spot
+    # without a real zip parse, since that entry sits right after the
+    # local file header at the start of the archive.
+    return b"application/epub+zip" in raw[:100]
 
 
 def _log_fetch_failure(url: str, reason: str, resp=None) -> None:
@@ -181,11 +197,34 @@ def download_and_process(
         _log_fetch_failure(url, "html response, no downloadable file found", resp)
         raise DownloadError(f"HTML 응답입니다 (다운로드 대상 파일 아님, Content-Type: {content_type or 'text/html'}): {resp.url}")
 
+    # ZIP-family and DjVu signatures, checked the same way as PDF above —
+    # by the actual bytes, never by Content-Type (a generic file server
+    # commonly answers with "application/octet-stream" for these too, and
+    # trusting that header instead of the signature is exactly what used to
+    # send real EPUB/DjVu files into the image decoder and produce a
+    # confusing "cannot identify image file" error).
+    if raw[:4] == b"PK\x03\x04" or raw[:4] == b"PK\x05\x06":
+        if _looks_like_epub(raw):
+            return _save_raw(raw, "epub", "application/epub+zip", "epub", url, source_page, title, job_id)
+        return _save_raw(raw, "zip", "application/zip", "zip", url, source_page, title, job_id)
+    if raw[:4] == b"AT&T":
+        return _save_raw(raw, "djvu", "image/vnd.djvu", "djvu", url, source_page, title, job_id)
+
     try:
         im = Image.open(io.BytesIO(raw))
         im.load()
-    except Exception as e:
-        raise DownloadError(f"이미지나 PDF로 인식할 수 없습니다 (Content-Type: {content_type or 'unknown'}): {e}") from e
+    except Exception:
+        # Not PDF, not HTML, not ZIP/EPUB, not DjVu, and Pillow — which
+        # does its own signature-based format sniffing, not extension or
+        # Content-Type — doesn't recognize it either. Genuinely unknown,
+        # not a bug to chase: report it as exactly that instead of leaking
+        # Pillow's raw "cannot identify image file <...>" exception text.
+        signature = raw[:8].hex()
+        _log_fetch_failure(url, "unknown binary signature", resp)
+        raise DownloadError(
+            f"UNKNOWN_BINARY (Content-Type: {content_type or 'unknown'}, signature: {signature}): "
+            f"지원하지 않는 파일 형식입니다."
+        )
 
     fmt = im.format or "JPEG"
     orig_ext = FORMAT_EXT.get(fmt, "bin")
