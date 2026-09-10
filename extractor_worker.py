@@ -69,7 +69,7 @@ def process_submission(row: dict) -> None:
         resp.raise_for_status()
         content_type = resp.headers.get("Content-Type", "")
 
-        if content_type.startswith("image/"):
+        if content_type.startswith("image/") or content_type.startswith("application/pdf"):
             candidates = [{"url": url, "alt": title}]
         elif settings.get_only_og_image():
             if not source_page:

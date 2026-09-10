@@ -29,6 +29,15 @@
   table.pdf-table td.url-cell { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   table.pdf-table a { color: #2563eb; }
   #pdfListMsg { color: #666; font-size: 0.85rem; margin-bottom: 8px; }
+
+  button.secondary { background: #6b7280; }
+  button.secondary:hover { background: #4b5563; }
+  button.small { padding: 6px 12px; font-size: 0.85rem; }
+  .link-controls { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+  #linkListMsg { color: #666; font-size: 0.85rem; margin-bottom: 8px; }
+  #linkQueueResult { margin-top: 8px; font-size: 0.88rem; }
+  #linkQueueResult .ok { color: #16a34a; }
+  #linkQueueResult .fail { color: #dc2626; }
 </style>
 </head>
 <body>
@@ -47,6 +56,33 @@
       쓰고 있어서, 사이트가 막아둔 경우에도 서버가 대신 요청해서 가져옵니다.
     </p>
     <div id="manualResult"></div>
+  </section>
+
+  <section class="panel">
+    <h2>페이지에서 링크 찾기 (Link Gopher)</h2>
+    <div class="row">
+      <input type="text" id="linkPageUrl" placeholder="https://example.com/resources">
+      <input type="text" id="linkFolder" placeholder="폴더명(선택)" style="flex: 0 0 160px;">
+      <button id="linkFindBtn">링크 찾기</button>
+    </div>
+    <p style="color:#666; font-size:0.9rem; margin-top:0;">
+      페이지 안의 모든 링크(&lt;a href&gt;)를 뽑아서 보여줍니다. 자료실처럼 PDF/파일
+      링크가 잔뜩 있는 페이지에서 하나씩 열어보지 않고 골라서 큐에 넣을 때 씀.
+    </p>
+    <div id="linkListMsg"></div>
+    <div class="link-controls">
+      <button class="secondary small" id="linkSelectAll">전체선택</button>
+      <button class="secondary small" id="linkSelectNone">선택해제</button>
+      <button class="secondary small" id="linkSelectPdf">.pdf만 선택</button>
+      <button id="linkQueueBtn">선택 항목 큐에 추가</button>
+    </div>
+    <div class="pdf-table-wrap" style="max-height:320px;">
+      <table class="pdf-table">
+        <thead><tr><th style="width:28px;"></th><th>텍스트</th><th>URL</th></tr></thead>
+        <tbody id="linkTableBody"></tbody>
+      </table>
+    </div>
+    <div id="linkQueueResult"></div>
   </section>
 
   <section class="panel">
@@ -118,6 +154,97 @@ document.getElementById("manualUrl").addEventListener("keydown", e => {
 });
 
 loadPdfList();
+
+// ---- 페이지에서 링크 찾기 (Link Gopher) ----
+let foundLinks = [];
+
+function renderLinkTable() {
+  document.getElementById("linkTableBody").innerHTML = foundLinks.map((l, i) => `
+    <tr>
+      <td><input type="checkbox" class="lpick" data-i="${i}"></td>
+      <td>${(l.text || "").slice(0, 60)}</td>
+      <td class="url-cell" title="${l.url}"><a href="${l.url}" target="_blank">${l.url}</a></td>
+    </tr>
+  `).join("");
+}
+
+document.getElementById("linkFindBtn").onclick = async () => {
+  const url = document.getElementById("linkPageUrl").value.trim();
+  if (!url) return;
+  const btn = document.getElementById("linkFindBtn");
+  btn.disabled = true;
+  document.getElementById("linkListMsg").textContent = "찾는 중...";
+  document.getElementById("linkQueueResult").textContent = "";
+  try {
+    const res = await fetch("/api/links/extract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    const data = await res.json();
+    if (!data.success) {
+      document.getElementById("linkListMsg").textContent = "실패: " + data.error;
+      foundLinks = [];
+    } else {
+      foundLinks = data.links;
+      document.getElementById("linkListMsg").textContent = `${foundLinks.length}개 링크 찾음`;
+    }
+    renderLinkTable();
+  } catch (e) {
+    document.getElementById("linkListMsg").textContent = "요청 실패: " + e;
+  } finally {
+    btn.disabled = false;
+  }
+};
+document.getElementById("linkPageUrl").addEventListener("keydown", e => {
+  if (e.key === "Enter") document.getElementById("linkFindBtn").click();
+});
+
+document.getElementById("linkSelectAll").onclick = () => {
+  document.querySelectorAll(".lpick").forEach(cb => cb.checked = true);
+};
+document.getElementById("linkSelectNone").onclick = () => {
+  document.querySelectorAll(".lpick").forEach(cb => cb.checked = false);
+};
+document.getElementById("linkSelectPdf").onclick = () => {
+  document.querySelectorAll(".lpick").forEach(cb => {
+    cb.checked = /\.pdf(\?|#|$)/i.test(foundLinks[+cb.dataset.i].url);
+  });
+};
+
+document.getElementById("linkQueueBtn").onclick = async () => {
+  const picked = [...document.querySelectorAll(".lpick:checked")].map(cb => foundLinks[+cb.dataset.i]);
+  const resultEl = document.getElementById("linkQueueResult");
+  if (picked.length === 0) { resultEl.innerHTML = `<span class="fail">선택된 링크가 없습니다.</span>`; return; }
+
+  const pageUrl = document.getElementById("linkPageUrl").value.trim();
+  const folder = document.getElementById("linkFolder").value.trim();
+  const btn = document.getElementById("linkQueueBtn");
+  btn.disabled = true;
+  resultEl.textContent = `${picked.length}개 큐에 추가하는 중...`;
+  try {
+    const res = await fetch("/api/submissions/add", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        submissions: picked.map(l => ({ url: l.url, title: l.text, folder, source_page: pageUrl })),
+      }),
+    });
+    const data = await res.json();
+    if (!data.success) { resultEl.innerHTML = `<span class="fail">실패: ${data.error}</span>`; return; }
+    resultEl.innerHTML = `<span class="ok">${data.added}개 큐에 추가함 — 지금 처리 중...</span>`;
+    // 매 10초 자동 감시를 기다리지 않고 바로 한 번 처리 — 워커가 정지 상태여도
+    // "지금 처리"와 동일하게 즉시 한 번은 돌려줌.
+    await fetch("/api/workers/extractor/run-once", { method: "POST" });
+    await fetch("/api/workers/download/run-once", { method: "POST" });
+    resultEl.innerHTML = `<span class="ok">${data.added}개 큐에 추가하고 1차 처리까지 완료. 이미지 크롤러 페이지의 큐 목록에서 진행 상황을 볼 수 있습니다.</span>`;
+    loadPdfList();
+  } catch (e) {
+    resultEl.innerHTML = `<span class="fail">요청 실패: ${e}</span>`;
+  } finally {
+    btn.disabled = false;
+  }
+};
 </script>
 </body>
 </html>

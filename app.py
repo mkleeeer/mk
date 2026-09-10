@@ -1,7 +1,9 @@
 import io
 import re
 import threading
+import uuid
 import zipfile
+from datetime import datetime
 from urllib.parse import urlparse
 
 import requests
@@ -16,7 +18,7 @@ import pipeline
 import settings
 import sheets
 from queue_config import POLL_SECONDS, SPREADSHEET_ID, SPREADSHEET_URL
-from scrape import extract_images_from_html
+from scrape import extract_images_from_html, extract_links_from_html
 
 app = Flask(__name__)
 db.init_db()
@@ -233,6 +235,62 @@ def pdf_page():
 @app.route("/api/pdfs/recent")
 def api_pdfs_recent():
     return jsonify({"pdfs": db.list_by_mime_prefix("application/pdf")})
+
+
+@app.route("/api/links/extract", methods=["POST"])
+def api_links_extract():
+    """"Link Gopher" style bulk-link listing — fetch a page and return every
+    <a href> on it, so a resource/index page's file links can be picked out
+    without opening each one."""
+    data = request.get_json(force=True) or {}
+    url = (data.get("url") or "").strip()
+    if not url:
+        return jsonify({"success": False, "error": "url이 필요합니다."}), 400
+    try:
+        resp = net.fetch_page(url)
+        resp.raise_for_status()
+    except Exception as e:
+        return jsonify({"success": False, "error": f"페이지를 가져오지 못했습니다: {e}"}), 502
+    links = extract_links_from_html(resp.text, resp.url)
+    return jsonify({"success": True, "links": links, "total": len(links)})
+
+
+@app.route("/api/submissions/add", methods=["POST"])
+def api_submissions_add():
+    """Register URLs into the same submissions queue an AI would write to
+    (Path B in ARCHITECTURE.txt) — this is the one on-ramp the whole app is
+    built around, so web-UI features that discover URLs (Link Gopher, etc.)
+    feed into it too instead of bypassing it with a bespoke direct-download
+    call."""
+    data = request.get_json(force=True) or {}
+    items = data.get("submissions") or []
+    if not items:
+        return jsonify({"success": False, "error": "submissions 배열이 필요합니다."}), 400
+
+    now = datetime.now().isoformat(timespec="seconds")
+    rows = []
+    for item in items:
+        url = (item.get("url") or "").strip()
+        if not url:
+            continue
+        rows.append({
+            "id": f"sub_{uuid.uuid4().hex[:12]}",
+            "url": url,
+            "source_page": item.get("source_page") or "",
+            "title": (item.get("title") or "")[:150],
+            "folder": item.get("folder") or "",
+            "status": "pending",
+            "error": "",
+            "created_at": now,
+        })
+    if not rows:
+        return jsonify({"success": False, "error": "유효한 url이 없습니다."}), 400
+
+    try:
+        sheets.append_rows(SPREADSHEET_ID, "submissions", rows, sheets.SUBMISSIONS_HEADERS)
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+    return jsonify({"success": True, "added": len(rows)})
 
 
 @app.route("/extract", methods=["POST"])

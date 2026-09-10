@@ -26,6 +26,26 @@ def _looks_like_junk(url: str) -> bool:
     return bool(_JUNK_URL_PATTERNS.search(path))
 
 
+def extract_links_from_html(html: str, page_url: str) -> list:
+    """All <a href> links on a page (not just images) — the "Link Gopher"
+    style bulk-link-listing feature, used so a resource/index page's PDF
+    (or other file) links can be picked out and queued without opening
+    each one individually."""
+    soup = BeautifulSoup(html, "html.parser")
+    seen = set()
+    links = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        if not href or href.startswith(("javascript:", "mailto:", "tel:", "#")):
+            continue
+        absolute = urljoin(page_url, href)
+        if absolute in seen:
+            continue
+        seen.add(absolute)
+        links.append({"url": absolute, "text": a.get_text(strip=True)[:150]})
+    return links
+
+
 def largest_from_srcset(srcset: str) -> str:
     candidates = []
     for part in srcset.split(","):
