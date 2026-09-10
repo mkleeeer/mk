@@ -122,3 +122,18 @@
   workers remained stopped. User URL query keys are omitted from tracked files.
 - Validation: all 29 tests pass with
   `venv\Scripts\python.exe -m unittest discover -s tests -v`.
+
+## 2026-09-11 01:40 KST — Manual PDF queue processing
+
+- Added a PDF-page button using the existing exclusive run-once endpoint to
+  read saved sheet rows immediately, including when automatic processing is off.
+  UI distinguishes no pending work, handled rows, failures and an already busy
+  worker. It disables the button during the request and refreshes status/files.
+- Validation: 29 existing unit tests pass; Flask test client renders the new
+  button, returns 200 for a manual empty pass and 409 while the worker is busy.
+  `git diff --check` passes.
+- Deployment limitation: the running Flask process caches the old template.
+  Automatic approval review rejected the guarded stop/restart command as
+  blocked by policy, without a more specific reason. The command did not run;
+  existing server and automatic worker remain active. Application restart is
+  required for the button to appear in that process.

@@ -54,10 +54,12 @@
     <div class="link-controls">
       <input type="text" id="queueFolder" aria-label="PDF 저장 폴더" placeholder="폴더명 (기본: PDF)">
       <button id="queueAddBtn">PDF 시트에 추가</button>
+      <button id="queueRunBtn">지금 처리</button>
       <button id="queueToggleBtn" class="secondary">상태 확인 중</button>
     </div>
     <div id="queueStatus" role="status">자동 처리 상태를 확인하는 중...</div>
     <div id="queueResult" role="status"></div>
+    <p><strong>지금 처리</strong>는 시트에 저장된 대기 링크를 즉시 읽어 한 번 처리합니다. 자동 처리가 꺼져 있어도 사용할 수 있습니다. 시트 수정이 저장된 뒤 눌러주세요.</p>
     <p>실패한 행은 I열의 원인을 확인하고 D열(status)을 <code>pending</code>으로 바꾸면 재시도합니다. 중지하면 현재 파일 처리 후 멈춥니다.</p>
   </section>
 
@@ -139,6 +141,33 @@ async function loadQueueStatus() {
     document.getElementById('queueStatus').textContent = '앱 연결 실패: ' + e;
   }
 }
+document.getElementById('queueRunBtn').onclick = async () => {
+  const btn = document.getElementById('queueRunBtn');
+  const result = document.getElementById('queueResult');
+  btn.disabled = true;
+  btn.textContent = '처리 중...';
+  result.textContent = '시트를 바로 확인하고 대기 링크를 처리하고 있습니다...';
+  try {
+    const res = await fetch('/api/workers/pdf/run-once', {method: 'POST'});
+    const data = await res.json();
+    if (data.busy) {
+      result.textContent = '이미 PDF를 처리 중입니다. 진행 상태를 확인해주세요.';
+    } else if (!res.ok || !data.success) {
+      throw new Error(data.error || `HTTP ${res.status}`);
+    } else {
+      result.textContent = data.handled
+        ? `${data.handled}개 행의 처리를 마쳤습니다. 성공·실패 결과는 위 상태와 시트에서 확인하세요.`
+        : '시트를 확인했습니다. 새로 처리할 대기 링크가 없습니다. 방금 입력했다면 시트 저장 후 다시 눌러주세요.';
+    }
+  } catch (e) {
+    result.textContent = '요청 확인 실패: ' + e + '. 진행 상태를 확인한 뒤 다시 시도하세요.';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '지금 처리';
+    await loadQueueStatus();
+    loadPdfList();
+  }
+};
 document.getElementById('queueToggleBtn').onclick = async () => {
   const btn = document.getElementById('queueToggleBtn');
   btn.disabled = true;
