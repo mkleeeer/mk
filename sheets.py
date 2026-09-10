@@ -12,6 +12,8 @@ IMAGES_HEADERS = [
     "filename", "local_path", "original_path", "mime_type", "width", "height",
     "drive_file_id", "drive_url", "error", "created_at", "updated_at",
 ]
+PDF_HEADERS = ["url", "folder", "expected_md5", "status", "filename", "local_path",
+               "file_id", "md5", "error", "updated_at"]
 
 # googleapiclient's service object wraps an httplib2 connection that is not
 # safe to share across threads — concurrent calls on the same service (e.g.

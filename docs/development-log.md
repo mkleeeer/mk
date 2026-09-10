@@ -101,3 +101,24 @@
   the advertised download CDN returned HTTP 503, and the alternate mirror
   connection was reset by the remote host. The requested book was not saved.
   These upstream failures remain outside the repaired link-processing path.
+
+## 2026-09-11 01:23 KST — Separate PDF sheet and automatic processing
+
+- The PDF page previously submitted document links into the image submissions
+  queue and required extractor/download passes. Added a URL-first `pdfs` tab,
+  an independent PDF worker, automatic startup with app.py, status controls,
+  and multiline/Link Gopher additions targeting only the PDF queue.
+- A completed file followed by a failed Sheets result write must not be treated
+  as a download failure or retried automatically. Such rows retain downloading;
+  the UI reports the result-write error. Tests cover this failure and continuing
+  after an ordinary download failure, terminal rows, stop, and concurrent passes.
+- Reused existing local OAuth credentials; verified both credential files are
+  ignored. Native Sheets API confirmed headers, notes, widths and frozen row.
+  Browser visual inspection of the native tab was blocked by a Google sign-in
+  page; no credentials were entered. Local webapp rendered the PDF controls.
+- Live automatic test: entered the user-provided URL into A2 only, launched the
+  app, and observed downloading then downloaded without a manual run-once call.
+  The stored PDF is 838292 bytes and its MD5 matches the URL identifier. Image
+  workers remained stopped. User URL query keys are omitted from tracked files.
+- Validation: all 29 tests pass with
+  `venv\Scripts\python.exe -m unittest discover -s tests -v`.
