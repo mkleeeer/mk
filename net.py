@@ -1,4 +1,6 @@
 import io
+import ipaddress
+import socket
 import threading
 from collections import defaultdict
 from contextlib import nullcontext
@@ -8,6 +10,47 @@ import requests
 from PIL import Image
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+
+class BlockedURLError(Exception):
+    """Raised when a URL resolves to a non-public address. The submissions
+    sheet is a shared, write-anyone surface — any AI or collaborator can put
+    a URL in it — so the fetch layer refusing internal/loopback/link-local
+    targets is the app's actual SSRF boundary, not a UI-level nicety."""
+
+
+_ALLOWED_SCHEMES = {"http", "https"}
+
+
+def _is_public_address(ip: ipaddress._BaseAddress) -> bool:
+    return not (
+        ip.is_private or ip.is_loopback or ip.is_link_local
+        or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+    )
+
+
+def assert_public_url(url: str) -> None:
+    """Reject file://, localhost, private/loopback/link-local IPs (incl. the
+    169.254.169.254 cloud metadata address, which is link-local) and
+    anything that fails to resolve. Checked before the initial request AND
+    against the final response.url after redirects, so a public URL that
+    redirects to an internal one doesn't get its response used either —
+    this doesn't stop a redirect's own network hop mid-flight, but it does
+    mean internal content is never surfaced or saved."""
+    parsed = urlparse(url)
+    if parsed.scheme not in _ALLOWED_SCHEMES or not parsed.hostname:
+        raise BlockedURLError(f"지원하지 않는 URL 형식입니다: {url}")
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, None)
+    except socket.gaierror as e:
+        raise BlockedURLError(f"호스트를 확인할 수 없습니다: {parsed.hostname}") from e
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            continue
+        if not _is_public_address(ip):
+            raise BlockedURLError(f"내부망/사설 IP로의 요청은 차단됩니다: {parsed.hostname} -> {ip}")
 
 BROWSER_HEADERS = {
     "User-Agent": (
@@ -70,17 +113,24 @@ def image_headers(image_url: str, page_url: str) -> dict:
 
 
 def fetch_image(image_url: str, page_url: str = "", stream: bool = False):
+    assert_public_url(image_url)
     host_limiter = _limiter_for(image_url)
     with fetch_limiter:
         if host_limiter is not None:
             with host_limiter:
-                return _session().get(image_url, headers=image_headers(image_url, page_url), timeout=15, stream=stream)
-        return _session().get(image_url, headers=image_headers(image_url, page_url), timeout=15, stream=stream)
+                resp = _session().get(image_url, headers=image_headers(image_url, page_url), timeout=15, stream=stream)
+        else:
+            resp = _session().get(image_url, headers=image_headers(image_url, page_url), timeout=15, stream=stream)
+    assert_public_url(resp.url)
+    return resp
 
 
 def fetch_page(url: str):
+    assert_public_url(url)
     with fetch_limiter:
-        return _session().get(url, headers=BROWSER_HEADERS, timeout=15)
+        resp = _session().get(url, headers=BROWSER_HEADERS, timeout=15)
+    assert_public_url(resp.url)
+    return resp
 
 
 # How much of an image to download just to read its dimensions from the
@@ -97,6 +147,10 @@ def probe_image_dimensions(image_url: str, page_url: str = ""):
     download. Returns (width, height), or None if it can't be determined
     (e.g. truncated before Pillow could parse the header) — callers should
     treat None as "unknown" and let the candidate through, not reject it."""
+    try:
+        assert_public_url(image_url)
+    except BlockedURLError:
+        return None
     host_limiter = _limiter_for(image_url)
     try:
         with fetch_limiter:

@@ -26,6 +26,30 @@ def _looks_like_junk(url: str) -> bool:
     return bool(_JUNK_URL_PATTERNS.search(path))
 
 
+def find_pdf_links(soup: BeautifulSoup, page_url: str, limit: int = 5) -> list:
+    """Direct links to a .pdf file on a page — used when a submitted URL
+    turns out to be an HTML landing/redirect page rather than the file
+    itself (a "click here to download" page), so the download step can
+    follow one more hop to reach the actual PDF. Returns candidates in
+    document order; the caller tries them until one verifies as a real PDF,
+    since a page can have a stale/broken link before a working one."""
+    found = []
+    seen = set()
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        if not href or href.startswith(("javascript:", "mailto:", "#")):
+            continue
+        absolute = urljoin(page_url, href)
+        path = urlparse(absolute).path.lower()
+        if not path.endswith(".pdf") or absolute in seen:
+            continue
+        seen.add(absolute)
+        found.append(absolute)
+        if len(found) >= limit:
+            break
+    return found
+
+
 def extract_links_from_html(html: str, page_url: str) -> list:
     """All <a href> links on a page (not just images) — the "Link Gopher"
     style bulk-link-listing feature, used so a resource/index page's PDF

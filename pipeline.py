@@ -3,6 +3,8 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+import requests
+from bs4 import BeautifulSoup
 from PIL import Image
 
 try:
@@ -12,6 +14,7 @@ except ImportError:
 
 import db
 import net
+from scrape import find_pdf_links
 
 BASE_DIR = Path(__file__).parent
 DOWNLOADS_DIR = Path(r"G:\내 드라이브\[작업공간]\웹이미지 수집")
@@ -69,18 +72,54 @@ def _save_pdf(raw: bytes, url: str, source_page: str, title: str, job_id: str) -
     return record
 
 
+def _fetch_url(url: str):
+    """Fetch with error types kept distinguishable (URL/DNS, blocked
+    internal target, timeout, HTTP status, connection failure) instead of
+    collapsing everything into one generic "download failed" — matters for
+    the failure-breakdown view, which buckets by these exact messages."""
+    try:
+        resp = net.fetch_image(url, url)
+        resp.raise_for_status()
+        return resp
+    except net.BlockedURLError as e:
+        raise DownloadError(str(e)) from e
+    except requests.exceptions.Timeout as e:
+        raise DownloadError(f"연결 시간 초과: {e}") from e
+    except requests.exceptions.HTTPError as e:
+        raise DownloadError(f"다운로드 실패: {e}") from e
+    except requests.exceptions.ConnectionError as e:
+        raise DownloadError(f"연결 실패: {e}") from e
+    except requests.exceptions.RequestException as e:
+        raise DownloadError(f"다운로드 실패: {e}") from e
+
+
+def _resolve_pdf_from_html(raw: bytes, page_url: str):
+    """A URL can turn out to be an HTML landing/redirect page instead of the
+    file itself (a "click here to download" page) — same idea as a download
+    manager resolving a link before fetching it. Look for a direct .pdf link
+    on that page and follow it, trying candidates in order until one
+    actually verifies as a PDF by magic bytes (not just by extension).
+    Returns (raw_bytes, resolved_url) or (None, None) if nothing panned out."""
+    try:
+        soup = BeautifulSoup(raw, "html.parser")
+    except Exception:
+        return None, None
+    for candidate in find_pdf_links(soup, page_url):
+        try:
+            resp = _fetch_url(candidate)
+        except DownloadError:
+            continue
+        if resp.content[:5] == b"%PDF-":
+            return resp.content, candidate
+    return None, None
+
+
 def download_and_process(url: str, source_page: str = "", title: str = "", folder: str = "") -> dict:
     if not url:
         raise DownloadError("url이 필요합니다.")
 
     job_id = db.get_or_create_job(folder)
-
-    try:
-        resp = net.fetch_image(url, source_page or url)
-        resp.raise_for_status()
-    except Exception as e:
-        raise DownloadError(f"다운로드 실패: {e}") from e
-
+    resp = _fetch_url(url)
     raw = resp.content
 
     # PDF check comes first and by magic bytes, not Content-Type header — same
@@ -88,6 +127,13 @@ def download_and_process(url: str, source_page: str = "", title: str = "", folde
     # request can come back as an HTML page with an image/pdf Content-Type).
     if raw[:5] == b"%PDF-":
         return _save_pdf(raw, url, source_page, title, job_id)
+
+    content_type = resp.headers.get("Content-Type", "")
+    looks_like_html = content_type.startswith("text/html") or raw.lstrip()[:15].lower().startswith(b"<!doctype html") or raw.lstrip()[:5].lower() == b"<html"
+    if looks_like_html:
+        resolved_raw, resolved_url = _resolve_pdf_from_html(raw, resp.url)
+        if resolved_raw is not None:
+            return _save_pdf(resolved_raw, resolved_url, source_page or url, title, job_id)
 
     try:
         im = Image.open(io.BytesIO(raw))
