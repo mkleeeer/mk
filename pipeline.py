@@ -7,7 +7,6 @@ from datetime import datetime
 from pathlib import Path
 
 import requests
-from bs4 import BeautifulSoup
 from PIL import Image
 
 try:
@@ -17,7 +16,7 @@ except ImportError:
 
 import db
 import net
-from scrape import find_pdf_links
+import resolver
 
 BASE_DIR = Path(__file__).parent
 DOWNLOADS_DIR = Path(r"G:\내 드라이브\[작업공간]\웹이미지 수집")
@@ -154,14 +153,14 @@ def _diagnose_unknown_response(raw: bytes, url: str, resp, decode_error: Excepti
     return f"원본 임시 저장: {saved_path}"
 
 
-def _fetch_url(url: str, cookies: dict | None = None):
+def _fetch_url(url: str, cookies: dict | None = None, page_url: str = ""):
     """Fetch with error types kept distinguishable (URL/DNS, blocked
     internal target, timeout, specific HTTP status, connection failure)
     instead of collapsing everything into one generic "download failed" —
     matters both for the failure-breakdown view (buckets by these exact
     messages) and for telling a real block apart from a transient blip."""
     try:
-        resp = net.fetch_image(url, url, cookies=cookies)
+        resp = net.fetch_image(url, page_url or url, cookies=cookies)
     except net.BlockedURLError as e:
         _log_fetch_failure(url, "blocked (SSRF guard)")
         raise DownloadError(str(e)) from e
@@ -195,36 +194,23 @@ def _fetch_url(url: str, cookies: dict | None = None):
     return resp
 
 
-def _resolve_pdf_from_html(raw: bytes, page_url: str):
-    """A URL can turn out to be an HTML landing/redirect page instead of the
-    file itself (a "click here to download" page) — same idea as a download
-    manager resolving a link before fetching it. Look for a direct .pdf link
-    on that page and follow it, trying candidates in order until one
-    actually verifies as a PDF by magic bytes (not just by extension).
-    Returns (raw_bytes, resolved_url) or (None, None) if nothing panned out."""
-    try:
-        soup = BeautifulSoup(raw, "html.parser")
-    except Exception:
-        return None, None
-    for candidate in find_pdf_links(soup, page_url):
-        try:
-            resp = _fetch_url(candidate)
-        except DownloadError:
-            continue
-        if resp.content[:5] == b"%PDF-":
-            return resp.content, candidate
-    return None, None
-
-
 def download_and_process(
     url: str, source_page: str = "", title: str = "", folder: str = "",
-    cookies: dict | None = None,
+    cookies: dict | None = None, expected_md5: str = "",
 ) -> dict:
     """cookies: only ever what a caller explicitly hands in (e.g. the user's
     own already-logged-in session for a site) — never derived, stored, or
     reused automatically across calls."""
     if not url:
         raise DownloadError("url이 필요합니다.")
+
+    try:
+        expected_md5 = resolver.normalize_md5(expected_md5)
+        url_checksum = resolver.url_md5(url)
+        if expected_md5 and url_checksum and expected_md5 != url_checksum:
+            raise resolver.ResolutionError("입력 MD5와 URL의 MD5가 다릅니다.")
+    except resolver.ResolutionError as exc:
+        raise DownloadError(str(exc)) from exc
 
     job_id = db.get_or_create_job(folder)
     resp = _fetch_url(url, cookies=cookies)
@@ -236,22 +222,34 @@ def download_and_process(
         f"content-disposition={resp.headers.get('Content-Disposition', '-')}"
     )
 
+    requested_url = url
+    resolution = {}
+    if resolver.is_file(raw) or resolver.is_html(raw, content_type):
+        try:
+            # Caller cookies belong to the initial request; never forward a
+            # caller's cookie dict to a newly discovered mirror host.
+            resp, actual_md5, checked_md5 = resolver.resolve(
+                resp, url, lambda target, parent: _fetch_url(target, page_url=parent),
+                _diagnose_unknown_response, expected_md5=expected_md5,
+            )
+        except resolver.ResolutionError as exc:
+            raise DownloadError(str(exc)) from exc
+        raw = resp.content
+        content_type = resp.headers.get("Content-Type", "")
+        url = resp.url
+        if url != requested_url:
+            source_page = source_page or requested_url
+        resolution = {"requested_url": requested_url, "resolved_url": url,
+                      "md5": actual_md5, "md5_verified": bool(checked_md5)}
+
+    def resolved_record(record):
+        return {**record, **resolution}
+
     # PDF check comes first and by magic bytes, not Content-Type header — same
     # "never trust the header" reasoning as the image path below (a blocked
     # request can come back as an HTML page with an image/pdf Content-Type).
     if raw[:5] == b"%PDF-":
-        return _save_pdf(raw, url, source_page, title, job_id)
-
-    looks_like_html = content_type.startswith("text/html") or raw.lstrip()[:15].lower().startswith(b"<!doctype html") or raw.lstrip()[:5].lower() == b"<html"
-    if looks_like_html:
-        resolved_raw, resolved_url = _resolve_pdf_from_html(raw, resp.url)
-        if resolved_raw is not None:
-            return _save_pdf(resolved_raw, resolved_url, source_page or url, title, job_id)
-        # A real image URL never comes back as an HTML document, so there's
-        # no point handing this to Pillow — it's an HTML page (login wall,
-        # error page, a landing page with no findable PDF link), not a file.
-        _log_fetch_failure(url, "html response, no downloadable file found", resp)
-        raise DownloadError(f"HTML 응답입니다 (다운로드 대상 파일 아님, Content-Type: {content_type or 'text/html'}): {resp.url}")
+        return resolved_record(_save_pdf(raw, url, source_page, title, job_id))
 
     # ZIP-family and DjVu signatures, checked the same way as PDF above —
     # by the actual bytes, never by Content-Type (a generic file server
@@ -261,10 +259,10 @@ def download_and_process(
     # confusing "cannot identify image file" error).
     if raw[:4] == b"PK\x03\x04" or raw[:4] == b"PK\x05\x06":
         if _looks_like_epub(raw):
-            return _save_raw(raw, "epub", "application/epub+zip", "epub", url, source_page, title, job_id)
-        return _save_raw(raw, "zip", "application/zip", "zip", url, source_page, title, job_id)
+            return resolved_record(_save_raw(raw, "epub", "application/epub+zip", "epub", url, source_page, title, job_id))
+        return resolved_record(_save_raw(raw, "zip", "application/zip", "zip", url, source_page, title, job_id))
     if raw[:4] == b"AT&T":
-        return _save_raw(raw, "djvu", "image/vnd.djvu", "djvu", url, source_page, title, job_id)
+        return resolved_record(_save_raw(raw, "djvu", "image/vnd.djvu", "djvu", url, source_page, title, job_id))
 
     try:
         im = Image.open(io.BytesIO(raw))
@@ -334,4 +332,4 @@ def download_and_process(
         "drive_url": None,
     }
     db.insert_image(record)
-    return record
+    return resolved_record(record)

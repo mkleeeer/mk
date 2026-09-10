@@ -4,7 +4,7 @@ import socket
 import threading
 from collections import defaultdict
 from contextlib import nullcontext
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 from PIL import Image
@@ -116,16 +116,31 @@ def fetch_image(image_url: str, page_url: str = "", stream: bool = False, cookie
     """cookies is passed through only when a caller explicitly supplies it
     (e.g. the user's own session cookie for a site they're already logged
     into) — nothing here derives, stores, or reuses credentials on its own."""
-    assert_public_url(image_url)
-    host_limiter = _limiter_for(image_url)
-    with fetch_limiter:
-        if host_limiter is not None:
-            with host_limiter:
-                resp = _session().get(image_url, headers=image_headers(image_url, page_url), timeout=15, stream=stream, cookies=cookies)
-        else:
-            resp = _session().get(image_url, headers=image_headers(image_url, page_url), timeout=15, stream=stream, cookies=cookies)
-    assert_public_url(resp.url)
-    return resp
+    def origin(url):
+        parsed = urlparse(url)
+        return parsed.scheme.lower(), parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
+
+    target, referer = image_url, page_url
+    history = []
+    for hop in range(11):
+        # Validate every redirect BEFORE requesting it, including mirror hops.
+        assert_public_url(target)
+        with fetch_limiter:
+            with (_limiter_for(target) or nullcontext()):
+                resp = _session().get(
+                    target, headers=image_headers(target, referer), timeout=15,
+                    stream=stream, cookies=cookies if origin(target) == origin(image_url) else None,
+                    allow_redirects=False,
+                )
+        assert_public_url(resp.url)
+        if resp.status_code not in {301, 302, 303, 307, 308} or not resp.headers.get("Location"):
+            resp.history = history
+            return resp
+        resp.close()
+        if hop == 10:
+            raise requests.TooManyRedirects("다운로드 리다이렉트가 10회를 초과했습니다.")
+        history.append(resp)
+        referer, target = target, urljoin(resp.url, resp.headers["Location"])
 
 
 def fetch_page(url: str):

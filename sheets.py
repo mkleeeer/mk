@@ -6,7 +6,7 @@ from googleapiclient.errors import HttpError
 
 import drive
 
-SUBMISSIONS_HEADERS = ["id", "url", "source_page", "title", "folder", "status", "error", "created_at"]
+SUBMISSIONS_HEADERS = ["id", "url", "source_page", "title", "folder", "status", "error", "created_at", "kind"]
 IMAGES_HEADERS = [
     "id", "submission_id", "folder", "seq", "source_url", "source_page", "title", "status",
     "filename", "local_path", "original_path", "mime_type", "width", "height",

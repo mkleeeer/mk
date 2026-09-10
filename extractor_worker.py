@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime
 
 import net
+import resolver
 import settings
 import sheets
 from queue_config import POLL_SECONDS, SPREADSHEET_ID
@@ -69,7 +70,11 @@ def process_submission(row: dict) -> None:
         resp.raise_for_status()
         content_type = resp.headers.get("Content-Type", "")
 
-        if content_type.startswith("image/") or content_type.startswith("application/pdf"):
+        if (row.get("kind") == "file" or resolver.url_md5(url)
+                or content_type.startswith("image/") or content_type.startswith("application/pdf")
+                or resolver.is_document(resp.content)):
+            # File submissions keep ONE original URL so the downloader can
+            # resolve mirrors/checksums rather than queueing a book cover.
             candidates = [{"url": url, "alt": title}]
         elif settings.get_only_og_image():
             if not source_page:

@@ -45,15 +45,19 @@
   <h1>PDF 크롤러</h1>
 
   <section class="panel">
-    <h2>PDF URL 바로 다운로드</h2>
+    <h2>파일·설명 페이지·미러 URL 다운로드</h2>
     <div class="row">
-      <input type="text" id="manualUrl" placeholder="PDF 직접 링크">
+      <input type="text" id="manualUrl" placeholder="파일 직접 링크 또는 다운로드·미러 페이지 URL">
       <input type="text" id="manualFolder" placeholder="폴더명(선택)" style="flex: 0 0 160px;">
       <button id="manualBtn">다운로드</button>
     </div>
+    <div class="row">
+      <input type="text" id="expectedMd5" placeholder="MD5 (선택, 32자리) — 알고 있는 파일 지문과 대조" aria-label="MD5 (선택)">
+    </div>
     <p style="color:#666; font-size:0.9rem; margin-top:0;">
-      PDF URL을 넣으면 그대로 다운로드합니다. 이미지 크롤러와 같은 다운로드 엔진을
-      쓰고 있어서, 사이트가 막아둔 경우에도 서버가 대신 요청해서 가져옵니다.
+      페이지에 표시된 다운로드·미러 링크를 최대 4단계 따라갑니다. 실패한 미러는 다음 후보로 넘어갑니다.
+      URL에 MD5가 명시되어 있거나 직접 입력하면 받은 원본과 대조합니다.
+      PDF·EPUB·ZIP·DjVu·이미지를 지원하며, 로그인이나 JavaScript 조작이 필요한 페이지는 자동 처리하지 못할 수 있습니다.
     </p>
     <div id="manualResult"></div>
   </section>
@@ -122,6 +126,7 @@ async function loadPdfList() {
 document.getElementById("manualBtn").onclick = async () => {
   const url = document.getElementById("manualUrl").value.trim();
   const folder = document.getElementById("manualFolder").value.trim();
+  const expected_md5 = document.getElementById("expectedMd5").value.trim();
   const resultEl = document.getElementById("manualResult");
   if (!url) { resultEl.innerHTML = `<span class="fail">URL을 입력하세요.</span>`; return; }
   const btn = document.getElementById("manualBtn");
@@ -132,18 +137,19 @@ document.getElementById("manualBtn").onclick = async () => {
     const res = await fetch("/api/images/download", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, folder }),
+      body: JSON.stringify({ url, folder, expected_md5 }),
     });
     const data = await res.json();
     if (data.success) {
-      resultEl.innerHTML = `<span class="ok">완료: ${data.filename} (${data.job_id})</span>`;
+      resultEl.style.whiteSpace = "pre-wrap";
+      resultEl.textContent = `완료: ${data.filename} (${data.job_id})\n최종 주소: ${data.resolved_url || data.source_url}\nMD5: ${data.md5 || "-"} (${data.md5_verified ? "일치 확인" : "비교할 지문 미지정"})`;
       document.getElementById("manualUrl").value = "";
       loadPdfList();
     } else {
-      resultEl.innerHTML = `<span class="fail">실패: ${data.error}</span>`;
+      resultEl.textContent = `실패: ${data.error}`;
     }
   } catch (e) {
-    resultEl.innerHTML = `<span class="fail">요청 실패: ${e}</span>`;
+    resultEl.textContent = `요청 실패: ${e}`;
   } finally {
     btn.disabled = false;
     btn.textContent = "다운로드";
@@ -227,7 +233,7 @@ document.getElementById("linkQueueBtn").onclick = async () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        submissions: picked.map(l => ({ url: l.url, title: l.text, folder, source_page: pageUrl })),
+        submissions: picked.map(l => ({ url: l.url, title: l.text, folder, source_page: pageUrl, kind: "file" })),
       }),
     });
     const data = await res.json();

@@ -275,6 +275,7 @@ def api_submissions_add():
             continue
         rows.append({
             "id": f"sub_{uuid.uuid4().hex[:12]}",
+            "kind": "file" if item.get("kind") == "file" else "image",
             "url": url,
             "source_page": item.get("source_page") or "",
             "title": (item.get("title") or "")[:150],
@@ -416,6 +417,7 @@ def api_download_image():
             # request — e.g. the user's own already-logged-in session
             # cookies for a site they have legitimate access to.
             cookies=data.get("cookies") if isinstance(data.get("cookies"), dict) else None,
+            expected_md5=data.get("expected_md5", ""),
         )
     except pipeline.DownloadError as e:
         return jsonify({"success": False, "url": url, "error": str(e)}), 400
@@ -443,6 +445,7 @@ def api_download_batch():
                 source_page=(item.get("source_page") or "").strip(),
                 title=(item.get("title") or "").strip(),
                 folder=folder,
+                expected_md5=item.get("expected_md5", ""),
             )
             results.append({"success": True, "file_id": record["id"], **record})
         except pipeline.DownloadError as e:

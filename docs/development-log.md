@@ -31,3 +31,32 @@
 - Commit setup: `git commit` initially reported `Author identity unknown`.
   Used per-command agent identity `Codex <codex@localhost>` for this commit;
   global Git settings and the user's identity were not changed.
+
+## 2026-09-11 00:30 KST — Resolve intermediate pages and mirrors
+
+- Confirmed the old resolver inspected only .pdf links on one HTML page and
+  accepted only an immediately returned PDF. It had no MD5 identity validation
+  or traversal of intermediate/mirror pages. The queue treated description
+  pages as image pages and could select a cover instead of the requested file.
+- Added bounded traversal of advertised file/mirror links, fallback after
+  HTTP/unknown-body/checksum failures, explicit MD5 validation, resolution logs,
+  and UI inputs/results. File-mode queue rows retain the original URL for the
+  download worker. Existing image rows keep their previous behavior.
+- Each HTTP download redirect is checked before fetching; explicit caller
+  cookies are not sent to another origin. No site-specific endpoints are guessed.
+- First resolver test run: 16 passed, two redirect fixtures failed at
+  `Response.close()` because their fabricated responses had no raw stream and
+  did not mark their supplied body consumed. Marked fixture content consumed,
+  matching the non-streaming requests responses represented by these tests.
+- Validation: `venv\Scripts\python.exe -m unittest discover -s tests -v`
+  passes all 19 tests, including multihop fallback, MD5 mismatch, preserved
+  source/final URLs, API/queue integration, image-row compatibility, cycles,
+  traversal limits, and redirect address/cookie checks. `git diff --check` passes.
+- Runtime verification: restarted the local server and confirmed the updated
+  URL/MD5 controls in the browser, preserving the user's existing URL input.
+  That input previously failed with a final-CDN read timeout. A failed direct
+  endpoint cannot supply an alternative mirror list; the original description
+  page is needed. No user URL, temporary key or response payload was added to Git.
+- See [resolver behavior and limits](file-resolver.md). Generated fixtures
+  establish behavior; the external description/mirror page and successful
+  download have not been verified.
