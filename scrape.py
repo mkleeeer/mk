@@ -60,7 +60,7 @@ def extract_links_from_html(html: str, page_url: str) -> list:
     links = []
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
-        if not href or href.startswith(("javascript:", "mailto:", "tel:", "#")):
+        if not href or href.startswith(("javascript:", "mailto:", "tel:", "ftp:", "#")):
             continue
         absolute = urljoin(page_url, href)
         if absolute in seen:
@@ -68,6 +68,51 @@ def extract_links_from_html(html: str, page_url: str) -> list:
         seen.add(absolute)
         links.append({"url": absolute, "text": a.get_text(strip=True)[:150]})
     return links
+
+
+# Generic site nav/utility labels — checked as an *exact* match on the
+# trimmed, lowercased link text, never as a substring, so real content
+# whose title happens to contain one of these words isn't caught. Not tied
+# to any site's markup, URL scheme, or result count on purpose: a CSS
+# selector or "assume N results per page" rule only works for the one page
+# it was tuned against.
+_NAV_TEXT_EXACT = {
+    "login", "log in", "log-in", "logon", "sign in", "sign-in", "signin",
+    "register", "sign up", "sign-up", "signup", "logout", "log out",
+    "home", "forum", "forums", "news", "rss", "contact", "contact us",
+    "about", "about us", "help", "faq", "terms", "privacy", "sitemap",
+    "menu", "search",
+    "로그인", "로그아웃", "회원가입", "홈", "포럼", "뉴스", "문의", "문의하기",
+    "소개", "회사소개", "고객센터", "이용약관", "개인정보", "개인정보처리방침",
+    "사이트맵", "검색",
+}
+
+# Pagination controls and bare language switchers — also exact-match only.
+_PAGINATION_TEXT_RE = re.compile(
+    r"^(\d{1,4}|next|prev|previous|first|last|more|»|«|›|‹|\.\.\.|다음|이전|처음|마지막|더보기)$",
+    re.IGNORECASE,
+)
+_LANG_TEXT_RE = re.compile(
+    r"^(english|한국어|ko|en|ja|zh|fr|de|es|ru|中文|日本語|español|français|deutsch|русский)$",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_nav_link(text: str) -> bool:
+    t = text.strip().lower()
+    if not t:
+        return False
+    return t in _NAV_TEXT_EXACT or bool(_PAGINATION_TEXT_RE.match(t)) or bool(_LANG_TEXT_RE.match(t))
+
+
+def filter_navigation_links(links: list) -> list:
+    """Drop the obvious site-chrome links (login/register/home/forum/news/
+    rss/contact/about, language switchers, pagination) out of a raw
+    extract_links_from_html() result, leaving everything else as candidates
+    for the resolver/downloader. Text-keyword and scheme based only — no
+    domain names, CSS selectors, or "N results per page" assumptions, since
+    those only hold for the one page they were tuned against."""
+    return [link for link in links if not _looks_like_nav_link(link.get("text", ""))]
 
 
 def largest_from_srcset(srcset: str) -> str:

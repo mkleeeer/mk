@@ -18,7 +18,7 @@ import pipeline
 import settings
 import sheets
 from queue_config import POLL_SECONDS, SPREADSHEET_ID, SPREADSHEET_URL
-from scrape import extract_images_from_html, extract_links_from_html
+from scrape import extract_images_from_html, extract_links_from_html, filter_navigation_links
 
 app = Flask(__name__)
 db.init_db()
@@ -251,7 +251,7 @@ def api_links_extract():
         resp.raise_for_status()
     except Exception as e:
         return jsonify({"success": False, "error": f"페이지를 가져오지 못했습니다: {e}"}), 502
-    links = extract_links_from_html(resp.text, resp.url)
+    links = filter_navigation_links(extract_links_from_html(resp.text, resp.url))
     return jsonify({"success": True, "links": links, "total": len(links)})
 
 
