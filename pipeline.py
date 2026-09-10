@@ -72,25 +72,55 @@ def _save_pdf(raw: bytes, url: str, source_page: str, title: str, job_id: str) -
     return record
 
 
-def _fetch_url(url: str):
+def _log_fetch_failure(url: str, reason: str, resp=None) -> None:
+    """One line with everything needed to tell *why* a fetch failed without
+    re-running it — final URL (redirects may have changed it), status code,
+    and Content-Type, alongside the original URL and the failure reason."""
+    final_url = resp.url if resp is not None else "-"
+    status = resp.status_code if resp is not None else "-"
+    ctype = resp.headers.get("Content-Type", "-") if resp is not None else "-"
+    print(f"[pipeline] fetch failed: {reason} | url={url} final_url={final_url} status={status} content-type={ctype}")
+
+
+def _fetch_url(url: str, cookies: dict | None = None):
     """Fetch with error types kept distinguishable (URL/DNS, blocked
-    internal target, timeout, HTTP status, connection failure) instead of
-    collapsing everything into one generic "download failed" — matters for
-    the failure-breakdown view, which buckets by these exact messages."""
+    internal target, timeout, specific HTTP status, connection failure)
+    instead of collapsing everything into one generic "download failed" —
+    matters both for the failure-breakdown view (buckets by these exact
+    messages) and for telling a real block apart from a transient blip."""
     try:
-        resp = net.fetch_image(url, url)
-        resp.raise_for_status()
-        return resp
+        resp = net.fetch_image(url, url, cookies=cookies)
     except net.BlockedURLError as e:
+        _log_fetch_failure(url, "blocked (SSRF guard)")
         raise DownloadError(str(e)) from e
     except requests.exceptions.Timeout as e:
+        _log_fetch_failure(url, "timeout")
         raise DownloadError(f"연결 시간 초과: {e}") from e
-    except requests.exceptions.HTTPError as e:
-        raise DownloadError(f"다운로드 실패: {e}") from e
     except requests.exceptions.ConnectionError as e:
+        _log_fetch_failure(url, "connection error")
         raise DownloadError(f"연결 실패: {e}") from e
     except requests.exceptions.RequestException as e:
+        _log_fetch_failure(url, "request error")
         raise DownloadError(f"다운로드 실패: {e}") from e
+
+    if resp.status_code == 403:
+        _log_fetch_failure(url, "403 forbidden", resp)
+        raise DownloadError(f"접근이 거부되었습니다 (403): {resp.url}")
+    if resp.status_code == 404:
+        _log_fetch_failure(url, "404 not found", resp)
+        raise DownloadError(f"파일을 찾을 수 없습니다 (404): {resp.url}")
+    if resp.status_code == 429:
+        _log_fetch_failure(url, "429 rate limited", resp)
+        raise DownloadError(f"요청이 너무 잦습니다 (429): {resp.url}")
+    if resp.status_code >= 500:
+        _log_fetch_failure(url, f"{resp.status_code} server error", resp)
+        raise DownloadError(f"서버 오류 ({resp.status_code}): {resp.url}")
+    try:
+        resp.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        _log_fetch_failure(url, f"{resp.status_code} http error", resp)
+        raise DownloadError(f"다운로드 실패: {e}") from e
+    return resp
 
 
 def _resolve_pdf_from_html(raw: bytes, page_url: str):
@@ -114,13 +144,25 @@ def _resolve_pdf_from_html(raw: bytes, page_url: str):
     return None, None
 
 
-def download_and_process(url: str, source_page: str = "", title: str = "", folder: str = "") -> dict:
+def download_and_process(
+    url: str, source_page: str = "", title: str = "", folder: str = "",
+    cookies: dict | None = None,
+) -> dict:
+    """cookies: only ever what a caller explicitly hands in (e.g. the user's
+    own already-logged-in session for a site) — never derived, stored, or
+    reused automatically across calls."""
     if not url:
         raise DownloadError("url이 필요합니다.")
 
     job_id = db.get_or_create_job(folder)
-    resp = _fetch_url(url)
+    resp = _fetch_url(url, cookies=cookies)
     raw = resp.content
+    content_type = resp.headers.get("Content-Type", "")
+    print(
+        f"[pipeline] fetched: url={url} final_url={resp.url} status={resp.status_code} "
+        f"content-type={content_type} content-length={resp.headers.get('Content-Length', '-')} "
+        f"content-disposition={resp.headers.get('Content-Disposition', '-')}"
+    )
 
     # PDF check comes first and by magic bytes, not Content-Type header — same
     # "never trust the header" reasoning as the image path below (a blocked
@@ -128,19 +170,22 @@ def download_and_process(url: str, source_page: str = "", title: str = "", folde
     if raw[:5] == b"%PDF-":
         return _save_pdf(raw, url, source_page, title, job_id)
 
-    content_type = resp.headers.get("Content-Type", "")
     looks_like_html = content_type.startswith("text/html") or raw.lstrip()[:15].lower().startswith(b"<!doctype html") or raw.lstrip()[:5].lower() == b"<html"
     if looks_like_html:
         resolved_raw, resolved_url = _resolve_pdf_from_html(raw, resp.url)
         if resolved_raw is not None:
             return _save_pdf(resolved_raw, resolved_url, source_page or url, title, job_id)
+        # A real image URL never comes back as an HTML document, so there's
+        # no point handing this to Pillow — it's an HTML page (login wall,
+        # error page, a landing page with no findable PDF link), not a file.
+        _log_fetch_failure(url, "html response, no downloadable file found", resp)
+        raise DownloadError(f"HTML 응답입니다 (다운로드 대상 파일 아님, Content-Type: {content_type or 'text/html'}): {resp.url}")
 
     try:
         im = Image.open(io.BytesIO(raw))
         im.load()
     except Exception as e:
-        content_type = resp.headers.get("Content-Type", "unknown")
-        raise DownloadError(f"이미지나 PDF로 인식할 수 없습니다 (Content-Type: {content_type}): {e}") from e
+        raise DownloadError(f"이미지나 PDF로 인식할 수 없습니다 (Content-Type: {content_type or 'unknown'}): {e}") from e
 
     fmt = im.format or "JPEG"
     orig_ext = FORMAT_EXT.get(fmt, "bin")

@@ -112,15 +112,18 @@ def image_headers(image_url: str, page_url: str) -> dict:
     return headers
 
 
-def fetch_image(image_url: str, page_url: str = "", stream: bool = False):
+def fetch_image(image_url: str, page_url: str = "", stream: bool = False, cookies: dict | None = None):
+    """cookies is passed through only when a caller explicitly supplies it
+    (e.g. the user's own session cookie for a site they're already logged
+    into) — nothing here derives, stores, or reuses credentials on its own."""
     assert_public_url(image_url)
     host_limiter = _limiter_for(image_url)
     with fetch_limiter:
         if host_limiter is not None:
             with host_limiter:
-                resp = _session().get(image_url, headers=image_headers(image_url, page_url), timeout=15, stream=stream)
+                resp = _session().get(image_url, headers=image_headers(image_url, page_url), timeout=15, stream=stream, cookies=cookies)
         else:
-            resp = _session().get(image_url, headers=image_headers(image_url, page_url), timeout=15, stream=stream)
+            resp = _session().get(image_url, headers=image_headers(image_url, page_url), timeout=15, stream=stream, cookies=cookies)
     assert_public_url(resp.url)
     return resp
 

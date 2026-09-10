@@ -412,6 +412,10 @@ def api_download_image():
             source_page=(data.get("source_page") or "").strip(),
             title=(data.get("title") or "").strip(),
             folder=(data.get("folder") or "").strip(),
+            # Only ever what the caller explicitly sends for this one
+            # request — e.g. the user's own already-logged-in session
+            # cookies for a site they have legitimate access to.
+            cookies=data.get("cookies") if isinstance(data.get("cookies"), dict) else None,
         )
     except pipeline.DownloadError as e:
         return jsonify({"success": False, "url": url, "error": str(e)}), 400
