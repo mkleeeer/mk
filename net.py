@@ -62,9 +62,10 @@ BROWSER_HEADERS = {
 }
 
 
-def _new_session() -> requests.Session:
+def _new_session(retry_requests: bool = True) -> requests.Session:
     s = requests.Session()
-    retry = Retry(total=4, backoff_factor=0.8, status_forcelist=[429, 500, 502, 503, 504])
+    retry = (Retry(total=4, backoff_factor=0.8, status_forcelist=[429, 500, 502, 503, 504])
+             if retry_requests else Retry(total=0, raise_on_status=False))
     adapter = HTTPAdapter(max_retries=retry, pool_maxsize=10, pool_connections=10)
     s.mount("http://", adapter)
     s.mount("https://", adapter)
@@ -81,10 +82,11 @@ def _new_session() -> requests.Session:
 _local = threading.local()
 
 
-def _session() -> requests.Session:
-    if getattr(_local, "session", None) is None:
-        _local.session = _new_session()
-    return _local.session
+def _session(retry_requests: bool = True) -> requests.Session:
+    key = "session" if retry_requests else "mirror_session"
+    if getattr(_local, key, None) is None:
+        setattr(_local, key, _new_session(retry_requests))
+    return getattr(_local, key)
 
 
 # Cap how many upstream fetches run at the same time so a burst of requests
@@ -112,7 +114,8 @@ def image_headers(image_url: str, page_url: str) -> dict:
     return headers
 
 
-def fetch_image(image_url: str, page_url: str = "", stream: bool = False, cookies: dict | None = None):
+def fetch_image(image_url: str, page_url: str = "", stream: bool = False, cookies: dict | None = None,
+                retry_requests: bool = True):
     """cookies is passed through only when a caller explicitly supplies it
     (e.g. the user's own session cookie for a site they're already logged
     into) — nothing here derives, stores, or reuses credentials on its own."""
@@ -127,7 +130,7 @@ def fetch_image(image_url: str, page_url: str = "", stream: bool = False, cookie
         assert_public_url(target)
         with fetch_limiter:
             with (_limiter_for(target) or nullcontext()):
-                resp = _session().get(
+                resp = _session(retry_requests).get(
                     target, headers=image_headers(target, referer), timeout=15,
                     stream=stream, cookies=cookies if origin(target) == origin(image_url) else None,
                     allow_redirects=False,

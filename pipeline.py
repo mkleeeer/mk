@@ -153,14 +153,14 @@ def _diagnose_unknown_response(raw: bytes, url: str, resp, decode_error: Excepti
     return f"원본 임시 저장: {saved_path}"
 
 
-def _fetch_url(url: str, cookies: dict | None = None, page_url: str = ""):
+def _fetch_url(url: str, cookies: dict | None = None, page_url: str = "", retry_requests: bool = True):
     """Fetch with error types kept distinguishable (URL/DNS, blocked
     internal target, timeout, specific HTTP status, connection failure)
     instead of collapsing everything into one generic "download failed" —
     matters both for the failure-breakdown view (buckets by these exact
     messages) and for telling a real block apart from a transient blip."""
     try:
-        resp = net.fetch_image(url, page_url or url, cookies=cookies)
+        resp = net.fetch_image(url, page_url or url, cookies=cookies, retry_requests=retry_requests)
     except net.BlockedURLError as e:
         _log_fetch_failure(url, "blocked (SSRF guard)")
         raise DownloadError(str(e)) from e
@@ -229,7 +229,7 @@ def download_and_process(
             # Caller cookies belong to the initial request; never forward a
             # caller's cookie dict to a newly discovered mirror host.
             resp, actual_md5, checked_md5 = resolver.resolve(
-                resp, url, lambda target, parent: _fetch_url(target, page_url=parent),
+                resp, url, lambda target, parent: _fetch_url(target, page_url=parent, retry_requests=False),
                 _diagnose_unknown_response, expected_md5=expected_md5,
             )
         except resolver.ResolutionError as exc:

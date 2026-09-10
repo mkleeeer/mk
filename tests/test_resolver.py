@@ -192,6 +192,18 @@ class QueueResolverTests(unittest.TestCase):
 
 
 class RedirectTests(unittest.TestCase):
+    def test_mirror_requests_skip_hidden_adapter_retries(self):
+        with net._new_session(False) as session:
+            self.assertEqual(session.get_adapter("https://example.com").max_retries.total, 0)
+        with net._new_session() as session:
+            self.assertEqual(session.get_adapter("https://example.com").max_retries.total, 4)
+        session = Mock()
+        session.get.return_value = response("https://example.com/file", b"", 429)
+        with patch.object(net, "_session", return_value=session) as factory, patch.object(net, "assert_public_url"):
+            with self.assertRaisesRegex(pipeline.DownloadError, "429"):
+                pipeline._fetch_url("https://example.com/file", retry_requests=False)
+        factory.assert_called_once_with(False)
+
     def test_private_redirect_checked_before_request(self):
         first = response("https://example.com/first", b"", 302, {"Location": "http://127.0.0.1/private"})
         session = Mock()

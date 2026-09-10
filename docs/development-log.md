@@ -83,3 +83,21 @@
   `git diff --check` passes. Live saved-file GET returned HTTP 200, attachment
   disposition, and the expected 838292 bytes with matching MD5.
 - User URL query keys and actual response bodies are excluded from this log.
+
+## 2026-09-11 — Avoid nested retries while trying mirrors
+
+- A live POST to the local downloader exceeded the test client's 300-second
+  timeout while the resolver was waiting on a file candidate. The existing
+  adapter could retry a candidate four times (and honor upstream Retry-After)
+  before the resolver ever saw its failure. The exact upstream wait mechanism
+  was not established by the local timeout alone.
+- Mirror candidates now use a separate per-thread session with adapter retries
+  disabled. The resolver handles fallback to the next advertised mirror. Direct
+  requests keep their existing retry behavior. This does not add a total wall
+  clock deadline: socket timeouts, DNS and slow transfers still affect duration.
+- Validation: all 24 unittest cases pass, including the no-retry mirror policy
+  and returning a 429 failure to the resolver without retrying the same host.
+- Live retry after restart returned a handled RESOLUTION_FAILED response:
+  the advertised download CDN returned HTTP 503, and the alternate mirror
+  connection was reset by the remote host. The requested book was not saved.
+  These upstream failures remain outside the repaired link-processing path.
