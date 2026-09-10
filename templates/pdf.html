@@ -109,14 +109,23 @@ async function loadPdfList() {
     const res = await fetch("/api/pdfs/recent");
     const data = await res.json();
     const pdfs = data.pdfs || [];
-    document.getElementById("pdfTableBody").innerHTML = pdfs.map(p => `
-      <tr>
-        <td>${p.filename}</td>
-        <td>${p.job_id}</td>
-        <td class="url-cell"><a href="${p.source_url}" target="_blank" title="${p.source_url}">${p.source_url}</a></td>
-        <td>${p.created_at}</td>
-      </tr>
-    `).join("");
+    const table = document.getElementById("pdfTableBody");
+    table.replaceChildren();
+    for (const p of pdfs) {
+      const row = document.createElement("tr");
+      const fileCell = document.createElement("td");
+      const fileLink = document.createElement("a");
+      fileLink.href = `/api/files/${encodeURIComponent(p.id)}/download`;
+      fileLink.textContent = `${p.filename} — 파일 받기`;
+      fileCell.append(fileLink);
+      row.append(fileCell);
+      for (const value of [p.job_id, p.source_url, p.created_at]) {
+        const cell = document.createElement("td");
+        cell.textContent = value || "";
+        row.append(cell);
+      }
+      table.append(row);
+    }
     document.getElementById("pdfListMsg").textContent = `${pdfs.length}개`;
   } catch (e) {
     document.getElementById("pdfListMsg").textContent = "불러오기 실패: " + e;
@@ -143,6 +152,10 @@ document.getElementById("manualBtn").onclick = async () => {
     if (data.success) {
       resultEl.style.whiteSpace = "pre-wrap";
       resultEl.textContent = `완료: ${data.filename} (${data.job_id})\n최종 주소: ${data.resolved_url || data.source_url}\nMD5: ${data.md5 || "-"} (${data.md5_verified ? "일치 확인" : "비교할 지문 미지정"})`;
+      const fileLink = document.createElement("a");
+      fileLink.href = `/api/files/${encodeURIComponent(data.file_id)}/download`;
+      fileLink.textContent = "파일 받기";
+      resultEl.append(document.createElement("br"), fileLink);
       document.getElementById("manualUrl").value = "";
       loadPdfList();
     } else {

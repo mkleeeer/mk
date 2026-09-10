@@ -60,3 +60,26 @@
 - See [resolver behavior and limits](file-resolver.md). Generated fixtures
   establish behavior; the external description/mirror page and successful
   download have not been verified.
+
+## 2026-09-11 — Recover from malformed links and expose saved files
+
+- Runtime failures: both POST `/api/images/download` and `/api/links/extract`
+  returned HTTP 500 with `ValueError: Invalid IPv6 URL`. A real description
+  page contained an ed2k link with square brackets in its filename. urljoin
+  attempted to parse that unsupported scheme before the link filter ran.
+- Added shared HTTP(S) link validation before parsing candidates. Malformed
+  authorities, invalid ports, unsupported schemes and bad base URLs no longer
+  abort processing of the remaining valid links.
+- Runtime resolver logs also showed a global Mirrors directory and a language
+  switch being visited ahead of GET. Navigation/language links are excluded;
+  direct file/GET links are ranked before other candidates, before the cap.
+- The registry contained a successfully downloaded PDF, but the web list only
+  showed its filename. Added `/api/files/<id>/download` and visible file-download
+  links. The route serves the stored bytes without revisiting an expiring remote
+  link and restricts resolved paths to the configured download directory.
+- Validation: `venv\Scripts\python.exe -m unittest discover -s tests -v`
+  passes all 23 tests. Includes ed2k/invalid-HTTP fixtures, link API regression,
+  candidate ranking, stored-file responses and out-of-directory rejection.
+  `git diff --check` passes. Live saved-file GET returned HTTP 200, attachment
+  disposition, and the expected 838292 bytes with matching MD5.
+- User URL query keys and actual response bodies are excluded from this log.

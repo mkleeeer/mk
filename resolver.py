@@ -7,6 +7,7 @@ from urllib.parse import parse_qsl, unquote, urldefrag, urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from PIL import Image
+from scrape import http_link, _looks_like_nav_link
 
 
 class ResolutionError(Exception):
@@ -23,7 +24,10 @@ def normalize_md5(value):
 
 def url_md5(url):
     """Only explicit MD5 markers, never an arbitrary 32-character ID."""
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+    except ValueError as exc:
+        raise ResolutionError("올바르지 않은 URL입니다.") from exc
     values = [normalize_md5(v) for k, v in parse_qsl(parsed.query)
               if k.lower() == "md5"]
     match = re.search(r"/md5/([0-9a-fA-F]{32})(?:/|$)", unquote(parsed.path), re.I)
@@ -69,30 +73,40 @@ def download_links(raw, page_url, limit=8):
     """
     soup = BeautifulSoup(raw[:2_000_000], "html.parser")
     base = soup.find("base", href=True)
-    base_url = urljoin(page_url, base["href"]) if base else page_url
-    found = []
-    seen = set()
+    base_url = (http_link(page_url, base["href"]) if base else "") or page_url
+    found = {}
 
-    def add(href):
-        absolute = urldefrag(urljoin(base_url, href.strip()))[0]
-        if urlparse(absolute).scheme not in {"http", "https"} or absolute in seen:
+    def add(href, priority):
+        absolute = http_link(base_url, href)
+        if not absolute:
             return
-        seen.add(absolute)
-        found.append(absolute)
+        absolute = urldefrag(absolute)[0]
+        if absolute == urldefrag(page_url)[0]:
+            return
+        found[absolute] = min(found.get(absolute, priority), priority)
 
     for tag in soup.find_all("a", href=True):
         href = tag["href"]
-        parsed = urlparse(urljoin(base_url, href))
+        absolute = http_link(base_url, href)
+        if not absolute:
+            continue
+        parsed = urlparse(absolute)
         label = " ".join((tag.get_text(" ", strip=True), tag.get("title", ""), tag.get("aria-label", "")))
         marked_md5 = any(k.lower() == "md5" for k, _ in parse_qsl(parsed.query)) or "/md5/" in parsed.path.lower()
-        if (tag.has_attr("download") or _EXT.search(parsed.path) or _PATH.search(parsed.path)
-                or _LABEL.search(label) or label.strip().lower() in {"get", "[get]"} or marked_md5):
-            add(href)
+        if (_looks_like_nav_link(label) or tag.find_parent(["nav", "header", "footer"])
+                or any(k.lower() in {"lang", "language"} for k, _ in parse_qsl(parsed.query))):
+            continue
+        direct = tag.has_attr("download") or _EXT.search(parsed.path) or _PATH.search(parsed.path) or label.strip().lower() in {"get", "[get]"}
+        # A site's global "Mirrors" directory is not a mirror of this file.
+        if label.strip().lower() == "mirrors" and not marked_md5 and not direct:
+            continue
+        if direct or marked_md5 or _LABEL.search(label):
+            add(href, 0 if direct else 10 if marked_md5 else 20)
     for meta in soup.find_all("meta", attrs={"http-equiv": re.compile("^refresh$", re.I)}):
         match = re.search(r"(?:^|;)\s*url\s*=\s*(.+)$", meta.get("content", ""), re.I)
         if match:
-            add(match.group(1).strip(" '\""))
-    return found[:limit]
+            add(match.group(1).strip(" '\""), 5)
+    return sorted(found, key=found.get)[:limit]
 
 
 def resolve(initial, requested_url, fetch, diagnose, expected_md5="", max_depth=4, max_requests=12):

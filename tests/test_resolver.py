@@ -9,6 +9,7 @@ import requests
 import net
 import pipeline
 import resolver
+import scrape
 import test_unknown_binary
 
 
@@ -23,6 +24,24 @@ def response(url, body, status=200, headers=None):
 
 
 class ResolverTests(unittest.TestCase):
+    def test_malformed_peer_links_do_not_hide_valid_downloads(self):
+        html = b'''<base href="http://[bad"><a href="ed2k://|file|Book[1].pdf|123|/">Ed2k</a>
+        <a href="http://[bad">Download</a><a href="https://example.com:bad/file">Download</a>
+        <a href="/get.php?md5=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">GET</a>'''
+        base = "https://example.com/book"
+        expected = base.replace("/book", "/get.php?md5=" + "a" * 32)
+        self.assertEqual(resolver.download_links(html, base), [expected])
+        self.assertEqual(scrape.extract_links_from_html(html.decode(), base), [{"url": expected, "text": "GET"}])
+
+    def test_direct_file_precedes_navigation_and_candidate_limit(self):
+        html = ('<a href="/mirrors.php">Mirrors</a><a href="/setlang?md5=' + "a" * 32 + '&lang=ru">RU</a>'
+                + ''.join(f'<a href="/alternate/{i}">Mirror {i}</a>' for i in range(12))
+                + '<a href="/get.php">GET</a>')
+        links = resolver.download_links(html.encode(), "https://example.com/book", limit=8)
+        self.assertEqual(links[0], "https://example.com/get.php")
+        self.assertEqual(len(links), 8)
+        self.assertFalse(any("mirrors.php" in url or "setlang" in url for url in links))
+
     def test_multihop_mirror_fallback_and_checksum(self):
         raw = b"%PDF-1.6\ncorrect document"
         md5 = hashlib.md5(raw).hexdigest()
@@ -127,6 +146,29 @@ class PipelineResolverTests(unittest.TestCase):
         self.assertEqual(reply.status_code, 200)
         self.assertTrue(reply.json["md5_verified"])
         self.assertEqual(reply.json["md5"], digest)
+        # Receiving a stored file must not re-fetch an expired remote URL.
+        with patch.object(pipeline.net, "fetch_image") as fetch:
+            saved = app.app.test_client().get(f"/api/files/{reply.json['file_id']}/download")
+            self.assertEqual(saved.status_code, 200)
+            self.assertEqual(saved.data, raw)
+            self.assertIn("attachment", saved.headers["Content-Disposition"])
+            saved.close()
+            fetch.assert_not_called()
+
+    def test_saved_file_route_rejects_unknown_and_outside_paths(self):
+        import app
+        client = app.app.test_client()
+        self.assertEqual(client.get("/api/files/missing/download").status_code, 404)
+        with patch.object(app.db, "get_image", return_value={"local_path": "../registry.db"}):
+            self.assertEqual(client.get("/api/files/outside/download").status_code, 404)
+
+    def test_link_api_ignores_ed2k_instead_of_returning_500(self):
+        import app
+        page = response("https://example.com/book", '<a href="ed2k://|file|Book[1].pdf|/">Ed2k</a><a href="/get.php">GET</a>')
+        with patch.object(app.net, "fetch_page", return_value=page):
+            reply = app.app.test_client().post("/api/links/extract", json={"url": page.url})
+        self.assertEqual(reply.status_code, 200)
+        self.assertEqual(reply.json["links"], [{"url": "https://example.com/get.php", "text": "GET"}])
 
 
 class QueueResolverTests(unittest.TestCase):

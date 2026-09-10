@@ -237,6 +237,19 @@ def api_pdfs_recent():
     return jsonify({"pdfs": db.list_by_mime_prefix("application/pdf")})
 
 
+@app.route("/api/files/<file_id>/download")
+def api_download_saved_file(file_id):
+    record = db.get_image(file_id)
+    if not record:
+        return jsonify({"error": "저장된 파일을 찾을 수 없습니다."}), 404
+    root = pipeline.DOWNLOADS_DIR.resolve()
+    path = (root / record["local_path"]).resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        return jsonify({"error": "저장된 파일을 찾을 수 없습니다."}), 404
+    return send_file(path, mimetype=record["mime_type"] or "application/octet-stream",
+                     as_attachment=True, download_name=record["filename"])
+
+
 @app.route("/api/links/extract", methods=["POST"])
 def api_links_extract():
     """"Link Gopher" style bulk-link listing — fetch a page and return every
