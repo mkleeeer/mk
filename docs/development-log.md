@@ -137,3 +137,16 @@
   blocked by policy, without a more specific reason. The command did not run;
   existing server and automatic worker remain active. Application restart is
   required for the button to appear in that process.
+
+## 2026-09-11 02:07 KST — Separate PDF automatic controls
+
+- Replaced the changing-label toggle with persistent automatic start and stop
+  buttons beside the manual run-once button. Controls reflect the current state
+  and are disabled during changes or when the server state is unavailable.
+- Validation: all 29 unit tests pass. Flask test-client checks confirm separate
+  controls render, stop clears running state and start restores it without
+  contacting remote services. JavaScript syntax and Git whitespace checks pass.
+- A guarded restart of the current local app was again rejected by automatic
+  approval review as blocked by policy, with no specific reason. The command
+  did not run. The live app still has the functional single start/stop toggle;
+  separate buttons require an application restart.
